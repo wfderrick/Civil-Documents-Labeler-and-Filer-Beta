@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PaddleOCR Review Queue</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260615-1">
+</head>
+
+<body>
+  <header class="app-header">
+    <div>
+      <h1>Document Review Queue</h1>
+      <p>Review OCR metadata, choose filing folders, and edit final PDF names before filing.</p>
+    </div>
+    <div class="header-actions">
+      <button id="scanButton" class="primary">Scan PDFs</button>
+      <button id="fileAllButton">File Batch</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section class="panel settings-panel">
+        <h2>Folders</h2>
+        <label>Input folder<input id="inputFolder" type="text" placeholder="S:"></label>
+        <button type="button" onclick="openFolderBrowser('inputFolder')">Browse Input</button>
+        <div id="folderBrowserModal" class="hidden">
+          <h3>Select Folder</h3>
+          <div id="browseCurrentPath"></div>
+          <div id="browseFolderList"></div>
+          <button type="button" id="useFolderButton">Use this folder</button>
+          <button type="button"
+            onclick="document.getElementById('folderBrowserModal').classList.add('hidden')">Cancel</button>
+        </div>
+        <label>Output folder<input id="outputFolder" type="text" placeholder="S:"></label>
+        <button onclick="openFolderBrowser('outputFolder')">Browse Output</button>
+        <div id="folderBrowserModal" class="hidden">
+          <h3>Select Folder</h3>
+          <div id="browseCurrentPath"></div>
+          <div id="browseFolderList"></div>
+          <button type="button" id="useFolderButton">Use this folder</button>
+          <button type="button"
+            onclick="document.getElementById('folderBrowserModal').classList.add('hidden')">Cancel</button>
+        </div>
+        <label>Config file<input id="configPath" type="text" placeholder="Optional config.json"></label>
+        
+        <div class="setting-grid">
+          <label>Project code<input id="projectCode" type="text" value="Project"></label>
+          <label>Document type<input id="documentType" type="text" value="Document"></label>
+          <label>Language<input id="lang" type="text" value="en"></label>
+          <label>DPI<input id="dpi" type="number" value="300" min="72" max="400"></label>
+          <label>OCR device
+            <select id="ocrDevice">
+              <option value="auto">Auto</option>
+              <option value="gpu">GPU</option>
+              <option value="cpu">CPU</option>
+            </select>
+          </label>
+          <label>GPU ID<input id="gpuDeviceId" type="number" value="0" min="0" max="8"></label>
+          <label>CPU workers<input id="ocrWorkers" type="number" value="1" min="1" max="8"></label>
+          <label>CPU threads/worker<input id="ocrThreadsPerWorker" type="number" value="4" min="1" max="20"></label>
+        </div>
+      </section>
+
+      <section class="panel queue-panel">
+        <div class="panel-title-row">
+          <h2>Documents</h2>
+          <span id="queueCount">0</span>
+        </div>
+        <div id="documentList" class="document-list"></div>
+      </section>
+    </aside>
+
+    <section class="viewer-shell">
+      <div id="emptyState" class="empty-state">
+        <h2>No document selected</h2>
+        <p>Scan a folder, then choose a document from the queue.</p>
+      </div>
+
+      <div id="reviewPane" class="review-pane hidden">
+        <section class="pdf-panel">
+          <iframe id="pdfFrame" title="PDF preview"></iframe>
+        </section>
+
+        <section class="editor-panel">
+          <div class="editor-header">
+            <div>
+              <h2 id="documentTitle">Document</h2>
+              <p id="documentStatus">Needs review</p>
+            </div>
+            <button id="fileButton" class="primary">File PDF</button>
+          </div>
+
+          <div class="form-grid">
+            <label>Lot number<input id="lot" type="text"></label>
+            <label>Address<input id="address" type="text"></label>
+            <label>Project code<input id="editProjectCode" type="text"></label>
+            <label>Document type<input id="editDocumentType" type="text"></label>
+            <label>Tax map<input id="taxMap" type="text"></label>
+            <label>Parcel<input id="parcel" type="text"></label>
+            <label>Tax ID<input id="taxId" type="text"></label>
+          </div>
+
+          <div class="destination-box">
+            <label>Destination folder name<input id="folderName" type="text"></label>
+            <label>Final file name<input id="fileName" type="text"></label>
+            <div class="option-row">
+              <label class="check"><input id="copyFile" type="checkbox" checked> Copy instead of move</label>
+              <label class="check"><input id="saveText" type="checkbox"> Save OCR text</label>
+            </div>
+          </div>
+
+          <section class="ocr-panel">
+            <h3>OCR Text</h3>
+            <pre id="ocrText"></pre>
+          </section>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <!--This script tag is what connects this HTML file and the app.js file
+  which is defined in the static folder in this project directory. It
+  -->
+  <script src="{{ url_for('static', filename='app.js') }}?v=20260615-1"></script>
+</body>
+
+</html>

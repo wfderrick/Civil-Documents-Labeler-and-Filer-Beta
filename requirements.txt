@@ -1,0 +1,8 @@
+# Install PaddlePaddle GPU separately first, for example:
+# python -m pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu129/
+# Do NOT install the CPU paddlepaddle package over the GPU package.
+paddleocr==3.3.0
+paddlex==3.3.0
+PyMuPDF>=1.24.0
+Flask>=3.0.0
+requests>=2.31.0
