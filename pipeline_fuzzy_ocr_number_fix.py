@@ -635,26 +635,52 @@ def filter_sdat_records(records: list[dict[str, Any]], terms: SdatSearchTerms) -
 
 
 def lookup_maryland_property_records(terms: SdatSearchTerms) -> list[dict[str, Any]]:
-    if not terms.county:
-        return []
-    county_filter = f"upper({SDAT_FIELDS['county']}) like upper('%{soql_escape(terms.county)}%')"
-    strategies: list[list[str]] = []
-    if terms.account_number:
-        parts = [county_filter, or_equals(SDAT_FIELDS["account_number"], terms.account_number, (6, 8))]
-        if terms.district:
-            parts.append(or_equals(SDAT_FIELDS["district"], terms.district, (2,)))
-        strategies.append(parts)
-    if terms.tax_map:
-        strategies.append([county_filter, or_equals(SDAT_FIELDS["map"], terms.tax_map, (3, 4))])
-    if terms.parcel:
-        strategies.append([county_filter, or_equals(SDAT_FIELDS["parcel"], terms.parcel, (3, 4))])
-    if terms.lot:
-        strategies.append([county_filter, or_equals(SDAT_FIELDS["lot"], terms.lot, (2, 3, 4))])
+    county_filter = (
+        f"upper({SDAT_FIELDS['county']}) like upper('%{soql_escape(terms.county)}%')"
+        if terms.county else ""
+    )
 
-    for where_parts in strategies:
+    strategies: list[tuple[list[str], bool]] = []
+
+    # 1. Best: district + account + county
+    if terms.account_number and terms.district and county_filter:
+        strategies.append((
+            [
+                county_filter,
+                or_equals(SDAT_FIELDS["account_number"], terms.account_number, (6, 8)),
+                or_equals(SDAT_FIELDS["district"], terms.district, (2,)),
+            ],
+            False,  # do NOT filter by lot/map/parcel after this
+        ))
+
+    # 2. Tax ID without county, useful when county OCR fails
+    if terms.account_number and terms.district:
+        strategies.append((
+            [
+                or_equals(SDAT_FIELDS["account_number"], terms.account_number, (6, 8)),
+                or_equals(SDAT_FIELDS["district"], terms.district, (2,)),
+            ],
+            False,
+        ))
+
+    # 3. Map/parcel fallback
+    if county_filter and terms.tax_map:
+        strategies.append((
+            [county_filter, or_equals(SDAT_FIELDS["map"], terms.tax_map, (3, 4))],
+            True,
+        ))
+
+    if county_filter and terms.parcel:
+        strategies.append((
+            [county_filter, or_equals(SDAT_FIELDS["parcel"], terms.parcel, (3, 4))],
+            True,
+        ))
+
+    for where_parts, should_filter in strategies:
         records = sdat_get(where_parts)
         if records:
-            return filter_sdat_records(records, terms)
+            return filter_sdat_records(records, terms) if should_filter else records
+
     return []
 
 

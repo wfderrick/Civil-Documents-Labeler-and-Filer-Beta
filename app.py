@@ -554,7 +554,7 @@ def api_file_document(document_id: str):
             folder_name=payload.get("folder_name"),
             file_name=payload.get("file_name"),
         )
-    except FileNotFoundError:
+    except FileNotFoundError as error:
         return api_error("File not located in specified input folder anymore.", 400)
 
     write_state(state)
