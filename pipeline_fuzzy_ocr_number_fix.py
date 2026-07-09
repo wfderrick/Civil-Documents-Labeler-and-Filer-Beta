@@ -302,20 +302,103 @@ def render_pdf_page_crop(pdf_path: Path, image_dir: Path, dpi: int, page_index: 
         return image_path
 
 
-def extract_line_text(ocr_result: Any) -> list[str]:
-    lines: list[str] = []
+
+def _as_float_pair(value: Any) -> list[float] | None:
+    """Convert a PaddleOCR point-like value to [x, y]."""
+    try:
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            return [float(value[0]), float(value[1])]
+    except Exception:
+        return None
+    return None
+
+
+def _points_from_any(value: Any) -> list[list[float]]:
+    """Extract polygon points from PaddleOCR box/polygon formats."""
+    if value is None:
+        return []
+
+    # Rect format: [x0, y0, x1, y1]
+    if isinstance(value, (list, tuple)) and len(value) == 4 and all(isinstance(v, (int, float)) for v in value):
+        x0, y0, x1, y1 = [float(v) for v in value]
+        return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+
+    if isinstance(value, (list, tuple)):
+        points: list[list[float]] = []
+        for item in value:
+            point = _as_float_pair(item)
+            if point:
+                points.append(point)
+        return points
+
+    return []
+
+
+def _bbox_from_points(points: list[list[float]]) -> list[float]:
+    if not points:
+        return [0.0, 0.0, 0.0, 0.0]
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    return [min(xs), min(ys), max(xs), max(ys)]
+
+
+def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
+    """Return PaddleOCR text, confidence, and bounding boxes in image pixels.
+
+    Supports both PaddleOCR 3.x dictionary results and older list-style results.
+    """
+    items: list[dict[str, Any]] = []
+
     for page_result in ocr_result or []:
         if isinstance(page_result, dict):
-            lines.extend(str(item) for item in page_result.get("rec_texts", []) if str(item).strip())
-        elif isinstance(page_result, list):
-            for item in page_result:
+            texts = page_result.get("rec_texts") or []
+            scores = page_result.get("rec_scores") or page_result.get("scores") or []
+            boxes = (
+                page_result.get("rec_polys")
+                or page_result.get("rec_boxes")
+                or page_result.get("dt_polys")
+                or page_result.get("boxes")
+                or []
+            )
+            for index, text in enumerate(texts):
+                text = str(text).strip()
+                if not text:
+                    continue
+                raw_box = boxes[index] if index < len(boxes) else None
+                points = _points_from_any(raw_box)
+                bbox = _bbox_from_points(points)
                 try:
-                    text = item[1][0]
+                    confidence = float(scores[index]) if index < len(scores) else 0.0
                 except Exception:
-                    text = ""
-                if str(text).strip():
-                    lines.append(str(text))
-    return lines
+                    confidence = 0.0
+                items.append({
+                    "text": text,
+                    "confidence": confidence,
+                    "polygon": points,
+                    "bbox": bbox,
+                })
+
+        elif isinstance(page_result, list):
+            for raw_item in page_result:
+                try:
+                    points = _points_from_any(raw_item[0])
+                    text = str(raw_item[1][0]).strip()
+                    confidence = float(raw_item[1][1])
+                except Exception:
+                    continue
+                if text:
+                    items.append({
+                        "text": text,
+                        "confidence": confidence,
+                        "polygon": points,
+                        "bbox": _bbox_from_points(points),
+                    })
+
+    return items
+
+
+def extract_line_text(ocr_result: Any) -> list[str]:
+    return [item["text"] for item in extract_ocr_items(ocr_result) if item.get("text")]
 
 
 def ocr_images(image_paths: Iterable[Path], ocr: PaddleOCR) -> str:
@@ -325,9 +408,53 @@ def ocr_images(image_paths: Iterable[Path], ocr: PaddleOCR) -> str:
     return "\n".join(lines)
 
 
-def ocr_pdf(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> str:
+def render_pdf_pages_with_info(pdf_path: Path, image_dir: Path, dpi: int) -> list[dict[str, Any]]:
+    """Render every page and keep enough geometry to map OCR pixels back to PDF points."""
+    pages: list[dict[str, Any]] = []
+    matrix = fitz.Matrix(dpi / 72, dpi / 72)
+    with fitz.open(pdf_path) as document:
+        for page_index, page in enumerate(document):  # pyright: ignore[reportArgumentType]
+            image_path = image_dir / f"page-{page_index + 1:04d}.png"
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            pixmap.save(image_path)
+            pages.append({
+                "page_index": page_index,
+                "image_path": image_path,
+                "image_width": pixmap.width,
+                "image_height": pixmap.height,
+                "page_width": float(page.rect.width),
+                "page_height": float(page.rect.height),
+                "dpi": dpi,
+            })
+    return pages
+
+
+def ocr_pdf_with_layout(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> dict[str, Any]:
+    """OCR a PDF and preserve page-level bounding boxes for searchable text layers."""
+    lines: list[str] = []
+    ocr_pages: list[dict[str, Any]] = []
+
     with tempfile.TemporaryDirectory(prefix="paddleocr_pdf_") as temp_dir:
-        return ocr_images(render_pdf_pages(pdf_path, Path(temp_dir), dpi), ocr)
+        rendered_pages = render_pdf_pages_with_info(pdf_path, Path(temp_dir), dpi)
+        for page_info in rendered_pages:
+            result = ocr.predict(str(page_info["image_path"]))
+            items = extract_ocr_items(result)
+            lines.extend(item["text"] for item in items if item.get("text"))
+            ocr_pages.append({
+                "page_index": page_info["page_index"],
+                "image_width": page_info["image_width"],
+                "image_height": page_info["image_height"],
+                "page_width": page_info["page_width"],
+                "page_height": page_info["page_height"],
+                "dpi": page_info["dpi"],
+                "items": items,
+            })
+
+    return {"text": "\n".join(lines), "pages": ocr_pages}
+
+
+def ocr_pdf(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> str:
+    return ocr_pdf_with_layout(pdf_path, ocr, dpi)["text"]
 
 
 def ocr_pdf_title_block(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> str:
@@ -423,11 +550,13 @@ def _ocr_one_pdf_worker(index: int, pdf_path_text: str, dpi: int) -> tuple[int, 
         raise RuntimeError("OCR worker was not initialized.")
     pdf_path = Path(pdf_path_text)
     title_text = ocr_pdf_title_block(pdf_path, _WORKER_OCR, dpi)
-    full_text = ocr_pdf(pdf_path, _WORKER_OCR, dpi)
+    full_ocr = ocr_pdf_with_layout(pdf_path, _WORKER_OCR, dpi)
+    full_text = full_ocr["text"]
     return index, {
         "source_path": str(pdf_path),
         "source_name": pdf_path.name,
         "ocr_text": f"{pdf_path.stem}\n{title_text}\n{full_text}",
+        "ocr_pages": full_ocr["pages"],
     }
 
 
@@ -469,11 +598,13 @@ def ocr_pdf_batch(
         results: list[dict[str, Any]] = []
         for pdf_path in pdf_paths:
             title_text = ocr_pdf_title_block(pdf_path, ocr, dpi)
-            full_text = ocr_pdf(pdf_path, ocr, dpi)
+            full_ocr = ocr_pdf_with_layout(pdf_path, ocr, dpi)
+            full_text = full_ocr["text"]
             results.append({
                 "source_path": str(pdf_path),
                 "source_name": pdf_path.name,
                 "ocr_text": f"{pdf_path.stem}\n{title_text}\n{full_text}",
+                "ocr_pages": full_ocr["pages"],
             })
         return results
 

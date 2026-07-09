@@ -5,6 +5,13 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
+from datetime import datetime
+import fitz
+
+try:
+    import pikepdf
+except Exception:  # optional, metadata still works without it
+    pikepdf = None
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -89,7 +96,7 @@ def is_unknown(value: str) -> bool:
     )
 
 
-""""""
+"""The suggested_folder() function """
 def suggested_folder(metadata: dict[str, str]) -> str:
     return safe_path_part(
         f"Lot {metadata.get('lot', '')} - {metadata.get('address', '')}",
@@ -238,6 +245,7 @@ def scan_batch(
                     "source_path": scanned_document["source_path"],
                     "source_name": scanned_document["source_name"],
                     "ocr_text": scanned_document["ocr_text"],
+                    "ocr_pages": scanned_document.get("ocr_pages", []),
                     "metadata": metadata,
                     "filed_path": "",
                 }
@@ -353,6 +361,162 @@ def apply_document_update(
     return normalize_document(document)
 
 
+
+def metadata_keyword_text(document: dict[str, Any]) -> str:
+    metadata = document.get("metadata", {})
+    custom_text = {
+        "lot": metadata.get("lot", ""),
+        "address": metadata.get("address", ""),
+        "project_code": metadata.get("project_code", ""),
+        "document_type": metadata.get("document_type", ""),
+        "tax_map": metadata.get("tax_map", ""),
+        "parcel": metadata.get("parcel", ""),
+        "tax_id": metadata.get("tax_id", ""),
+        "source_name": document.get("source_name", ""),
+        "filed_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    return "; ".join(f"{key}={value}" for key, value in custom_text.items() if value)
+
+
+def add_paddle_searchable_text_layer(pdf_path: Path, document: dict[str, Any]) -> None:
+    """Add an invisible searchable text layer using PaddleOCR bounding boxes.
+
+    The OCR boxes are stored in image-pixel coordinates. This maps them back to
+    PDF page points using the image/page dimensions captured during OCR.
+    """
+    ocr_pages = document.get("ocr_pages") or []
+    if not ocr_pages:
+        return
+
+    with fitz.open(pdf_path) as pdf:
+        for page_data in ocr_pages:
+            try:
+                page_index = int(page_data.get("page_index", 0))
+                page = pdf[page_index]
+            except Exception:
+                continue
+
+            image_width = float(page_data.get("image_width") or 0)
+            image_height = float(page_data.get("image_height") or 0)
+            if image_width <= 0 or image_height <= 0:
+                continue
+
+            x_scale = float(page.rect.width) / image_width
+            y_scale = float(page.rect.height) / image_height
+
+            for item in page_data.get("items", []):
+                text = str(item.get("text", "")).strip()
+                bbox = item.get("bbox") or []
+                if not text or len(bbox) != 4:
+                    continue
+
+                try:
+                    x0, y0, x1, y1 = [float(value) for value in bbox]
+                except Exception:
+                    continue
+
+                rect = fitz.Rect(x0 * x_scale, y0 * y_scale, x1 * x_scale, y1 * y_scale)
+                if rect.is_empty or rect.width <= 0 or rect.height <= 0:
+                    continue
+
+                # Keep text invisible but searchable. render_mode=3 is invisible text.
+                font_size = max(1.0, min(rect.height * 0.85, 14.0))
+                try:
+                    result = page.insert_textbox(
+                        rect,
+                        text,
+                        fontsize=font_size,
+                        fontname="helv",
+                        render_mode=3,
+                        overlay=True,
+                    )
+                    if result < 0:
+                        # Fallback for very tight OCR boxes.
+                        page.insert_text(
+                            (rect.x0, rect.y1),
+                            text,
+                            fontsize=font_size,
+                            fontname="helv",
+                            render_mode=3,
+                            overlay=True,
+                        )
+                except Exception:
+                    continue
+
+        pdf.saveIncr()
+
+
+def write_standard_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
+    metadata = document.get("metadata", {})
+    with fitz.open(pdf_path) as pdf:
+        pdf.set_metadata({
+            **pdf.metadata, # type: ignore
+            "title": f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}",
+            "subject": metadata.get("address", ""),
+            "keywords": metadata_keyword_text(document),
+            "creator": "COA Barrett File Identifier and Sorter",
+        })
+        pdf.saveIncr()
+
+
+def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
+    """Write structured XMP metadata with a custom COA namespace."""
+    if pikepdf is None:
+        return
+
+    metadata = document.get("metadata", {})
+    namespace = "https://coabarrett.local/ns/ocr-file-sorter/1.0/"
+
+    try:
+        with pikepdf.Pdf.open(pdf_path, allow_overwriting_input=True) as pdf:
+            with pdf.open_metadata(set_pikepdf_as_editor=True) as meta:
+                try:
+                    meta.register_xml_namespace("coa", namespace)
+                except Exception:
+                    pass
+
+                title = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}".strip(" -")
+                if title:
+                    meta["dc:title"] = title
+                if metadata.get("address"):
+                    meta["dc:description"] = metadata.get("address", "")
+                meta["pdf:Keywords"] = metadata_keyword_text(document)
+
+                custom_fields = {
+                    "coa:Lot": metadata.get("lot", ""),
+                    "coa:Address": metadata.get("address", ""),
+                    "coa:ProjectCode": metadata.get("project_code", ""),
+                    "coa:DocumentType": metadata.get("document_type", ""),
+                    "coa:TaxMap": metadata.get("tax_map", ""),
+                    "coa:Parcel": metadata.get("parcel", ""),
+                    "coa:TaxID": metadata.get("tax_id", ""),
+                    "coa:OriginalFileName": document.get("source_name", ""),
+                    "coa:FiledAt": datetime.now().isoformat(timespec="seconds"),
+                    "coa:Application": "COA Barrett File Identifier and Sorter",
+                }
+                for key, value in custom_fields.items():
+                    if value:
+                        meta[key] = str(value)
+            pdf.save(pdf_path)
+    except Exception as exc:
+        print(f"Could not write XMP metadata to {pdf_path}: {exc}")
+
+
+def write_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
+    """Write standard metadata, structured XMP, and a PaddleOCR text layer."""
+    try:
+        add_paddle_searchable_text_layer(pdf_path, document)
+    except Exception as exc:
+        print(f"Could not add PaddleOCR searchable text layer to {pdf_path}: {exc}")
+
+    try:
+        write_standard_pdf_metadata(pdf_path, document)
+    except Exception as exc:
+        print(f"Could not write standard PDF metadata to {pdf_path}: {exc}")
+
+    write_xmp_metadata(pdf_path, document)
+
+
 def file_document_to_output(
     document: dict[str, Any],
     output_folder: Path,
@@ -379,6 +543,8 @@ def file_document_to_output(
         shutil.copy2(source_path, destination)
     else:
         shutil.move(str(source_path), destination)
+
+    write_pdf_metadata(destination, document)
 
     if save_text:
         destination.with_suffix(".txt").write_text(

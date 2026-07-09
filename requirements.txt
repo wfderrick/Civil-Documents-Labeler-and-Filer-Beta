@@ -6,3 +6,4 @@ paddlex==3.3.0
 PyMuPDF>=1.24.0
 Flask>=3.0.0
 requests>=2.31.0
+pikepdf>=9.0.0
