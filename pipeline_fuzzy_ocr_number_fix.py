@@ -23,6 +23,8 @@ except Exception:  # pragma: no cover - optional runtime check
 
 from paddleocr import PaddleOCR  # pyright: ignore[reportMissingImports]
 
+from visual_classifier import FIELD_NOTES_LABEL, classify_pdf_visual
+
 DEFAULT_TITLE_BLOCK_CROP = (0.55, 0.65, 1.0, 1.0)
 DOCUMENT_TYPE_THRESHOLD = 0.75
 SDAT_API_URL = "https://opendata.maryland.gov/resource/ed4q-f8tm.json"
@@ -53,6 +55,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "parallel_ocr": False,
     "ocr_workers": 1,
     "ocr_threads_per_worker": 4,
+    "visual_field_notes_classifier": True,
+    "visual_field_notes_threshold": 0.70,
     "default_county": "",
     "lot_pattern": [r"\blot\s*[:#-]?\s*([0-9]+R?)\b"],
     "county_patterns": [r"\b([A-Za-z]+)\s+County\b"],
@@ -342,41 +346,54 @@ def _bbox_from_points(points: list[list[float]]) -> list[float]:
     return [min(xs), min(ys), max(xs), max(ys)]
 
 
+def first_nonempty_value(*values):
+    for value in values:
+        if value is None:
+            continue
+        try:
+            if hasattr(value, "size") and value.size == 0:
+                continue
+            if len(value) == 0:
+                continue
+        except TypeError:
+            pass
+        return value
+    return None
+
+
 def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
     """Return PaddleOCR text, confidence, and bounding boxes in image pixels.
 
     Supports both PaddleOCR 3.x dictionary results and older list-style results.
     """
     items: list[dict[str, Any]] = []
-
+    
     for page_result in ocr_result or []:
         if isinstance(page_result, dict):
             texts = page_result.get("rec_texts") or []
-            scores = page_result.get("rec_scores") or page_result.get("scores") or []
-            boxes = (
-                page_result.get("rec_polys")
-                or page_result.get("rec_boxes")
-                or page_result.get("dt_polys")
-                or page_result.get("boxes")
-                or []
-            )
-            for index, text in enumerate(texts):
-                text = str(text).strip()
-                if not text:
-                    continue
-                raw_box = boxes[index] if index < len(boxes) else None
-                points = _points_from_any(raw_box)
-                bbox = _bbox_from_points(points)
-                try:
-                    confidence = float(scores[index]) if index < len(scores) else 0.0
-                except Exception:
-                    confidence = 0.0
-                items.append({
-                    "text": text,
-                    "confidence": confidence,
-                    "polygon": points,
-                    "bbox": bbox,
-                })
+            scores = page_result.get("rec_scores") or []
+            boxes = first_nonempty_value(
+            page_result.get("rec_polys"),
+            page_result.get("rec_boxes"),
+            page_result.get("dt_polys"),
+            page_result.get("boxes"),
+        )
+
+            for i, text in enumerate(texts):
+                item = {"text": str(text)}
+                item: dict[str, Any] = {
+                "text": str(text),
+                }
+                if i < len(scores):
+                    item["score"] = float(scores[i])
+
+                if boxes is not None and i < len(boxes):
+                    box = boxes[i]
+                    if hasattr(box, "tolist"):
+                        box = box.tolist()
+                    item["bbox"] = box
+
+                items.append(item)
 
         elif isinstance(page_result, list):
             for raw_item in page_result:
@@ -864,6 +881,62 @@ def extract_document_metadata_votes(scanned_documents: Iterable[dict[str, Any]],
     return [extract_metadata(document.get("ocr_text", ""), config, default_project_code, default_document_type) for document in scanned_documents]
 
 
+
+PLAN_DOCUMENT_TYPES = {"Site Plan", "House Location", "Wall Check"}
+
+
+def _field_notes_visual_threshold(config: Config) -> float:
+    try:
+        return float(config.get("visual_field_notes_threshold", 0.70))
+    except Exception:
+        return 0.70
+
+
+def fix_duplicate_document_types_with_visual_classifier(
+    votes: list[ExtractedMetadata],
+    scanned_documents: list[dict[str, Any]],
+    config: Config,
+) -> list[ExtractedMetadata]:
+    """Use visual classification to catch field notes mislabeled as plan documents.
+
+    This is intentionally a post-processing safety net. It only runs when there
+    are duplicate plan document types in the same batch, because that is the
+    common signal that Field Notes were OCR-labeled as Site Plan/Wall Check/etc.
+    It does not use OCR text; it renders the PDF and classifies the page visuals.
+    """
+    if not config.get("visual_field_notes_classifier", True):
+        return votes
+
+    by_type: dict[str, list[int]] = {}
+    for index, metadata in enumerate(votes):
+        by_type.setdefault(metadata.document_type, []).append(index)
+
+    updated = list(votes)
+    threshold = _field_notes_visual_threshold(config)
+
+    for document_type, indexes in by_type.items():
+        if document_type == "Field Notes" or document_type not in PLAN_DOCUMENT_TYPES or len(indexes) < 2:
+            continue
+
+        scored: list[tuple[float, int, str]] = []
+        for index in indexes:
+            source_path = scanned_documents[index].get("source_path") or scanned_documents[index].get("path")
+            if not source_path:
+                continue
+            label, confidence = classify_pdf_visual(source_path)
+            if label == FIELD_NOTES_LABEL:
+                scored.append((confidence, index, label))
+
+        # Convert visually confirmed field notes. Keep at least one original plan type.
+        scored.sort(reverse=True)
+        for confidence, index, _label in scored:
+            remaining_same_type = sum(1 for item in updated if item.document_type == document_type)
+            if confidence >= threshold and remaining_same_type > 1:
+                updated[index] = replace(updated[index], document_type="Field Notes")
+
+    return updated
+
+
 def choose_batch_metadata_by_vote(
     scanned_documents: list[dict[str, Any]],
     config: Config,
@@ -878,6 +951,7 @@ def choose_batch_metadata_by_vote(
     across the batch so the best document can supply them for all related files.
     """
     votes = extract_document_metadata_votes(scanned_documents, config, default_project_code, default_document_type)
+    votes = fix_duplicate_document_types_with_visual_classifier(votes, scanned_documents, config)
 
     shared = {
         "lot": vote_for_value((vote.lot for vote in votes), "Unknown Lot"),
@@ -913,8 +987,9 @@ def merge_batch_metadata(
     default_project_code: str,
     default_document_type: str,
     shared_metadata: Mapping[str, str],
+    document_metadata: ExtractedMetadata | None = None,
 ) -> ExtractedMetadata:
-    document_metadata = extract_metadata(document_text, config, default_project_code, default_document_type)
+    document_metadata = document_metadata or extract_metadata(document_text, config, default_project_code, default_document_type)
     return replace(
         document_metadata,
         lot=prefer_known(shared_metadata.get("lot", ""), document_metadata.lot),

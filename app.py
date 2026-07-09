@@ -219,7 +219,7 @@ def scan_batch(
     )
     print("Finished ocring documents")
     print("Begin merging metadata across documents")
-    shared_metadata, _votes = choose_batch_metadata_by_vote(
+    shared_metadata, metadata_votes = choose_batch_metadata_by_vote(
         scanned_documents=scanned,
         config=config,
         default_project_code=settings["project_code"],
@@ -228,7 +228,7 @@ def scan_batch(
     print("Finished merging metadata across documents")
     documents: list[dict[str, Any]] = []
     print("Begin normalizing documents")
-    for scanned_document in scanned:
+    for scanned_document, metadata_vote in zip(scanned, metadata_votes):
         metadata = asdict(
             merge_batch_metadata(
                 document_text=scanned_document["ocr_text"],
@@ -236,6 +236,7 @@ def scan_batch(
                 default_project_code=settings["project_code"],
                 default_document_type=settings["document_type"],
                 shared_metadata=shared_metadata,
+                document_metadata=metadata_vote,
             )
         )
         documents.append(
