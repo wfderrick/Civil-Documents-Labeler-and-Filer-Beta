@@ -57,8 +57,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "lot_pattern": [r"\blot\s*[:#-]?\s*([0-9]+R?)\b"],
     "county_patterns": [r"\b([A-Za-z]+)\s+County\b"],
     "map_patterns": [
-        r"\b(?:tax\s*)?map\s*[:#-]?\s*([0-9A-Za-z]+)\b",
-        r"\bmap\s*/\s*parcel\s*[:#-]?\s*([0-9A-Za-z]+)\s*/\s*[0-9A-Za-z]+\b",
+    r"\btax\s+map\s*[:#-]?\s*([0-9]+[A-Za-z]*)\b",
     ],
     "parcel_patterns": [
         r"\bparcel\s*[:#-]?\s*([0-9A-Za-z]+)\b",
@@ -512,7 +511,7 @@ def extract_metadata(text: str, config: Config, default_project_code: str, defau
     lot = first_match(lot_search_text, config.get("lot_pattern", [])) or "Unknown Lot"
 
     # Use OCR-number normalization for numeric identifiers only.
-    tax_map = first_match(text, config.get("map_patterns", []), normalize_numbers=True) or ""
+    tax_map = first_match(text, config.get("map_patterns", []), normalize_numbers=False) or ""
     parcel = first_match(text, config.get("parcel_patterns", []), normalize_numbers=True) or ""
     tax_id = first_match(text, config.get("tax_id_patterns", []), normalize_numbers=True) or ""
 

@@ -8,9 +8,8 @@
     "\\b([A-Za-z]+)\\s+County\\b"
   ],
   "map_patterns": [
-    "\\b(?:tax\\s*)?map\\s*[:#-]?\\s*([0-9A-Za-z]+)\\b",
-    "\\bmap\\s*/\\s*parcel\\s*[:#-]?\\s*([0-9A-Za-z]+)\\s*/\\s*[0-9A-Za-z]+\\b"
-  ],
+    "\\btax\\s*map\\s*[:#-]?\\s*([0-9]+[A-Za-z]*)\\b"
+],
   "parcel_patterns": [
     "\\bparcel\\s*[:#-]?\\s*([0-9A-Za-z]+)\\b",
     "\\bmap\\s*/\\s*parcel\\s*[:#-]?\\s*[0-9A-Za-z]+\\s*/\\s*([0-9A-Za-z]+)\\b"

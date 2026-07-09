@@ -554,7 +554,7 @@ def api_file_document(document_id: str):
             folder_name=payload.get("folder_name"),
             file_name=payload.get("file_name"),
         )
-    except FileNotFoundError as error:
+    except FileNotFoundError:
         return api_error("File not located in specified input folder anymore.", 400)
 
     write_state(state)
@@ -634,4 +634,4 @@ soon as you open the above address) the app object searches through
 defined routes and finds @app.get("/") pointing to the index() function
 and knows to call it."""
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5055, debug=False)
+    app.run(host="127.0.0.1", port=5055, debug=True)
