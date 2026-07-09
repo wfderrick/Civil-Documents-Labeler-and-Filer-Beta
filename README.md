@@ -1,6 +1,6 @@
 # OCR Batch Filing Pipeline
 
-This version is optimized for one related batch of PDFs, such as Site Plan, House Location, Wall Check, and Survey Notes.
+This version is optimized for one related batch of PDFs, such as Site Plan, House Location, Wall Check, and Field Notes.
 
 ## Key behavior
 
@@ -8,7 +8,7 @@ This version is optimized for one related batch of PDFs, such as Site Plan, Hous
 - Each document votes for shared lot and address.
 - The winning lot/address is applied to every document in the batch.
 - No combined batch text is used for metadata extraction.
-- Project code is extracted from the selected output folder name.
+- Project code can be entered manually; if left blank, it is extracted from the selected output folder name.
 - Metadata now includes lot, address, project code, document type, tax map, parcel, and tax ID.
 - SDAT lookup uses county + tax ID, tax map, parcel, and lot with flexible leading-zero matching.
 - Manual changes to lot or address on one document update every document in the batch.

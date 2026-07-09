@@ -85,10 +85,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "House Location": ["house location", "houselocation", "house loc", "hse location", "location drawing"],
         "Site Plan": ["site plan", "siteplan", "plot plan", "sitemap"],
         "Wall Check": ["wall check", "wallcheck", "wall chk", "foundation check"],
-        "Survey Notes": ["survey notes", "surveynotes", "field notes", "survey field notes", "notes"],
+        "Field Notes": ["field notes", "fieldnotes", "field note", "notes"],
         "Replat": ["replat", "re plat"],
     },
-    "document_type_patterns": [r"\s(wall check|site plan|survey notes|field notes|replat|house location)\s"],
+    "document_type_patterns": [r"\s(wall check|site plan|field notes|replat|house location)\s"],
 }
 
 OCR_CONFUSION_MAP = str.maketrans({"0": "o", "1": "l", "I": "l", "|": "l", "!": "l", "5": "s", "$": "s", "3": "e", "@": "a", "8": "b", "6": "g", "2": "z"})

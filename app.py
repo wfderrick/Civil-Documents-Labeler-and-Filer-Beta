@@ -12,7 +12,9 @@ from typing import Any
 from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
 
 from pipeline_fuzzy_ocr_number_fix import (
+    ExtractedMetadata,
     choose_batch_metadata_by_vote,
+    enrich_metadata_with_sdat,
     extract_project_code_from_output_folder,
     load_config,
     merge_batch_metadata,
@@ -46,7 +48,11 @@ ocr_language = None
 def api_error(message: str, status_code: int = 500):
     return jsonify({"error": message}), status_code
 
-
+"""The read_state() function returns all of the current settings and 
+document metadata stored in the documents.json file which is in the 
+.review_state folder in the project directory. If that file has not
+been created yet it returns a default dictionary with empty settings
+and documents."""
 def read_state() -> dict[str, Any]:
     if not STATE_FILE.exists():
         return dict(DEFAULT_STATE)
@@ -83,6 +89,7 @@ def is_unknown(value: str) -> bool:
     )
 
 
+""""""
 def suggested_folder(metadata: dict[str, str]) -> str:
     return safe_path_part(
         f"Lot {metadata.get('lot', '')} - {metadata.get('address', '')}",
@@ -105,6 +112,11 @@ def document_status(metadata: dict[str, str]) -> str:
     )
 
 
+"""The normalize_document() function returns a checked/corrected document
+dictionary. The folder_name, file_name, and status fields are checked, and 
+if empty or wrong corrected via the suggested_folder(), 
+suggested_filename(), and document_status() functions to match the metadata 
+gathered from the file."""
 def normalize_document(document: dict[str, Any]) -> dict[str, Any]:
     metadata = document["metadata"]
     document.setdefault("folder_name", suggested_folder(metadata))
@@ -140,25 +152,22 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
     input_folder_raw = (payload.get("input_folder") or "").strip()
     output_folder_raw = (payload.get("output_folder") or "").strip()
 
+    # Keep advanced/default settings in code/config instead of exposing them in the UI.
     return {
-        "input_folder": (
-            str(resolve_folder(input_folder_raw)) if input_folder_raw else ""
-        ),
-        "output_folder": (
-            str(resolve_folder(output_folder_raw)) if output_folder_raw else ""
-        ),
+        "input_folder": str(resolve_folder(input_folder_raw)) if input_folder_raw else "",
+        "output_folder": str(resolve_folder(output_folder_raw)) if output_folder_raw else "",
         "config_path": (payload.get("config_path") or str(DEFAULT_CONFIG_PATH)).strip(),
-        "project_code": payload.get("project_code") or "Project",
-        "document_type": payload.get("document_type") or "Document",
-        "lang": payload.get("lang") or "en",
+        "project_code": (payload.get("project_code") or "").strip(),
+        "project_code_override": (payload.get("project_code") or "").strip(),
+        "document_type": "Document",
+        "lang": "en",
         "dpi": int(payload.get("dpi") or 300),
         "ocr_device": payload.get("ocr_device") or "auto",
-        "gpu_device_id": int(payload.get("gpu_device_id") or 0),
-        "parallel_ocr": bool(payload.get("parallel_ocr", False)),
-        "ocr_workers": int(payload.get("ocr_workers") or 1),
-        "ocr_threads_per_worker": int(payload.get("ocr_threads_per_worker") or 4),
+        "gpu_device_id": 0,
+        "parallel_ocr": False,
+        "ocr_workers": 1,
+        "ocr_threads_per_worker": 4,
     }
-
 
 def scan_batch(
     input_folder: Path, ocr, config: dict[str, Any], settings: dict[str, Any]
@@ -258,25 +267,70 @@ def refresh_document_names(
     return normalize_document(document)
 
 
+def load_config_from_state(state: dict[str, Any]) -> dict[str, Any]:
+    settings = state.get("settings", {})
+    config_path = Path(settings.get("config_path") or DEFAULT_CONFIG_PATH).resolve()
+    return load_config(config_path if config_path.exists() else None)
+
+
+def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
+    return ExtractedMetadata(
+        lot=str(metadata.get("lot", "Unknown Lot")),
+        address=str(metadata.get("address", "Unknown Address")),
+        project_code=str(metadata.get("project_code", "Project")),
+        document_type=str(metadata.get("document_type", "Document")),
+        tax_map=str(metadata.get("tax_map", "")),
+        parcel=str(metadata.get("parcel", "")),
+        tax_id=str(metadata.get("tax_id", "")),
+    )
+
+
+def refresh_batch_address_from_sdat(state: dict[str, Any]) -> str | None:
+    """Use the current batch tax map/parcel/tax ID to refresh the address for all documents."""
+    documents = state.get("documents", [])
+    if not documents:
+        return None
+
+    config = load_config_from_state(state)
+    if not config.get("sdat_lookup", True):
+        return None
+
+    seed_metadata = metadata_from_dict(documents[0].get("metadata", {}))
+    batch_text = "\n".join(document.get("ocr_text", "") for document in documents)
+    enriched = enrich_metadata_with_sdat(seed_metadata, batch_text, config)
+
+    if is_unknown(enriched.address):
+        return None
+
+    for batch_document in documents:
+        batch_document["metadata"]["address"] = enriched.address
+        refresh_document_names(batch_document, auto_folder=True, auto_file_name=True)
+
+    return enriched.address
+
+
 def apply_document_update(
     state: dict[str, Any], document: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
     metadata = document["metadata"]
 
-    # Lot and address are batch-level values. If the user corrects one file,
-    # apply the correction to every document in the current batch.
-    shared_updates = {
-        field: payload[field]
-        for field in ("lot", "address", "tax_map", "parcel", "tax_id")
-        if field in payload
-    }
+    # These are batch-level values. If the user corrects one file, apply the
+    # correction to every document in the current batch.
+    shared_field_names = ("lot", "address", "tax_map", "parcel", "tax_id", "project_code")
+    shared_updates = {field: payload[field] for field in shared_field_names if field in payload}
+    changed_field = payload.get("changed_field", "")
+
     if shared_updates:
         for batch_document in state.get("documents", []):
             batch_document["metadata"].update(shared_updates)
-            refresh_document_names(
-                batch_document, auto_folder=True, auto_file_name=True
-            )
+            refresh_document_names(batch_document, auto_folder=True, auto_file_name=True)
 
+    # If the user edits a property identifier, refresh the official SDAT address
+    # once and apply that address to every document in the batch.
+    if changed_field in {"tax_map", "parcel", "tax_id"}:
+        refresh_batch_address_from_sdat(state)
+
+    # Keep non-shared fields document-specific if they are ever posted by older UI/state.
     for field in (*REQUIRED_METADATA_FIELDS, *OPTIONAL_METADATA_FIELDS):
         if field in payload and field not in shared_updates:
             metadata[field] = payload[field]
@@ -358,12 +412,21 @@ function imported from Flask with index.html as the only parameter.
 When render_template() is called it automatically searches the project
 directory(aka the drectory app.py is in) for a folder named templates
 containing HTML files index.html is the chosen name for this app, but
-it can be named anything."""
+it can be named anything. Render_template then opens and runs the HTML
+contained in index.html."""
 @app.get("/")
 def index():
     return render_template("index.html")
 
+@app.get("/favicon.ico")
+def favicon():
+    return "", 204
 
+
+"""The api_state() function returns a Response object holding the current 
+settings and documents. The read_state() function retrieves the settings
+and documents from the documents.json file in the .review_state folder in 
+project directory. """
 @app.get("/api/state")
 def api_state():
     state = read_state()
@@ -413,11 +476,17 @@ def api_scan():
         Path(settings["config_path"]).resolve() if settings["config_path"] else None
     )
     config = load_config(config_path if config_path and config_path.exists() else None)
-    settings["project_code"] = extract_project_code_from_output_folder(
-        output_folder,
-        config,
-        settings.get("project_code", "Project"),
-    )
+    manual_project_code = (settings.get("project_code") or "").strip()
+    if manual_project_code:
+        settings["project_code"] = safe_path_part(manual_project_code.upper(), "Project")
+        settings["project_code_override"] = settings["project_code"]
+    else:
+        settings["project_code"] = extract_project_code_from_output_folder(
+            output_folder,
+            config,
+            "Project",
+        )
+        settings["project_code_override"] = ""
     use_single_engine = (
         str(settings.get("ocr_device", "auto")).lower() == "gpu"
         or not settings.get("parallel_ocr", False)

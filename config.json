@@ -58,20 +58,19 @@
       "wall chk",
       "foundation check"
     ],
-    "Survey Notes": [
-      "survey notes",
-      "surveynotes",
-      "field notes",
-      "survey field notes",
-      "notes"
-    ],
     "Replat": [
       "replat",
       "re plat"
+    ],
+    "Field Notes": [
+      "field notes",
+      "fieldnotes",
+      "notes",
+      "field note"
     ]
   },
   "document_type_patterns": [
-    "\\s(wall check|site plan|survey notes|field notes|replat|house location)\\s"
+    "\\s(wall check|site plan|field notes|replat|house location)\\s"
   ],
   "parallel_ocr": false,
   "ocr_workers": 1,

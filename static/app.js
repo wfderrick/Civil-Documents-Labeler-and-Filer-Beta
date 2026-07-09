@@ -7,20 +7,15 @@ const fields = {
   outputFolder: $('outputFolder'),
   configPath: $('configPath'),
   projectCode: $('projectCode'),
-  documentType: $('documentType'),
-  lang: $('lang'),
   dpi: $('dpi'),
   ocrDevice: $('ocrDevice'),
-  gpuDeviceId: $('gpuDeviceId'),
-  ocrWorkers: $('ocrWorkers'),
-  ocrThreadsPerWorker: $('ocrThreadsPerWorker'),
   lot: $('lot'),
   address: $('address'),
-  editProjectCode: $('editProjectCode'),
-  editDocumentType: $('editDocumentType'),
   taxMap: $('taxMap'),
   parcel: $('parcel'),
   taxId: $('taxId'),
+  editProjectCode: $('editProjectCode'),
+  editDocumentType: $('editDocumentType'),
   folderName: $('folderName'),
   fileName: $('fileName'),
   copyFile: $('copyFile'),
@@ -68,6 +63,14 @@ function showToast(message, isError = false) {
   setTimeout(() => toast.classList.add('hidden'), 3800);
 }
 
+
+/*The requestJson() function takes in a url and using the fetch() function
+processes the returned data from the given url. For example right when you 
+open the browser and index.html runs app.js the loadState() function calls
+the requestJson() function with the url '/api/state. Which in turn calls the 
+fetch() function on the same url. This function makes a GET /api/state request
+to the Flask object which then calls the api_state function to return a json
+file */
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
@@ -137,11 +140,11 @@ function renderSelectedDocument(document) {
 
   fields.lot.value = document.metadata.lot || '';
   fields.address.value = document.metadata.address || '';
-  fields.editProjectCode.value = document.metadata.project_code || '';
-  fields.editDocumentType.value = document.metadata.document_type || '';
   fields.taxMap.value = document.metadata.tax_map || '';
   fields.parcel.value = document.metadata.parcel || '';
   fields.taxId.value = document.metadata.tax_id || '';
+  fields.editProjectCode.value = document.metadata.project_code || '';
+  if (fields.editDocumentType) fields.editDocumentType.value = document.metadata.document_type || 'Document';
   fields.folderName.value = document.folder_name || '';
   fields.fileName.value = document.file_name || '';
   $('ocrText').textContent = document.ocr_text || '';
@@ -162,14 +165,9 @@ function applyState(data) {
   fields.inputFolder.value = state.settings.input_folder || '';
   fields.outputFolder.value = state.settings.output_folder || '';
   fields.configPath.value = state.settings.config_path || '';
-  fields.projectCode.value = state.settings.project_code || 'Project';
-  fields.documentType.value = state.settings.document_type || 'Document';
-  fields.lang.value = state.settings.lang || 'en';
+  fields.projectCode.value = state.settings.project_code_override || state.settings.project_code || '';
   fields.dpi.value = state.settings.dpi || 300;
   if (fields.ocrDevice) fields.ocrDevice.value = state.settings.ocr_device || 'auto';
-  if (fields.gpuDeviceId) fields.gpuDeviceId.value = state.settings.gpu_device_id ?? 0;
-  if (fields.ocrWorkers) fields.ocrWorkers.value = state.settings.ocr_workers || 1;
-  if (fields.ocrThreadsPerWorker) fields.ocrThreadsPerWorker.value = state.settings.ocr_threads_per_worker || 4;
 
   if (!state.documents.some((document) => document.id === state.selectedId)) {
     state.selectedId = state.documents[0]?.id || null;
@@ -185,30 +183,25 @@ function scanPayload() {
     output_folder: fields.outputFolder.value,
     config_path: fields.configPath.value,
     project_code: fields.projectCode.value,
-    document_type: fields.documentType.value,
-    lang: fields.lang.value,
     dpi: Number(fields.dpi.value),
     ocr_device: fields.ocrDevice ? fields.ocrDevice.value : 'auto',
-    gpu_device_id: fields.gpuDeviceId ? Number(fields.gpuDeviceId.value) : 0,
-    parallel_ocr: fields.ocrDevice ? fields.ocrDevice.value !== 'gpu' : false,
-    ocr_workers: fields.ocrWorkers ? Number(fields.ocrWorkers.value) : 1,
-    ocr_threads_per_worker: fields.ocrThreadsPerWorker ? Number(fields.ocrThreadsPerWorker.value) : 4,
   };
 }
 
-function updatePayload(autoFolder = false, autoFileName = false) {
+function updatePayload(autoFolder = false, autoFileName = false, changedField = '') {
   return {
     lot: fields.lot.value,
     address: fields.address.value,
-    project_code: fields.editProjectCode.value,
-    document_type: fields.editDocumentType.value,
     tax_map: fields.taxMap.value,
     parcel: fields.parcel.value,
     tax_id: fields.taxId.value,
+    project_code: fields.editProjectCode.value,
+    document_type: fields.editDocumentType ? fields.editDocumentType.value : '',
     folder_name: fields.folderName.value,
     file_name: fields.fileName.value,
     auto_folder: autoFolder,
     auto_file_name: autoFileName,
+    changed_field: changedField,
   };
 }
 
@@ -235,13 +228,13 @@ async function scan() {
   }
 }
 
-async function saveCurrent(autoFolder = false, autoFileName = false) {
+async function saveCurrent(autoFolder = false, autoFileName = false, changedField = '') {
   const document = selectedDocument();
   if (!document) return null;
 
   const updated = await requestJson(`/api/documents/${document.id}`, {
     method: 'PATCH',
-    body: JSON.stringify(updatePayload(autoFolder, autoFileName)),
+    body: JSON.stringify(updatePayload(autoFolder, autoFileName, changedField)),
   });
 
   if (updated.documents) {
@@ -299,21 +292,31 @@ async function fileAll() {
   }
 }
 
+function metadataFieldName(id) {
+  const names = { taxMap: 'tax_map', taxId: 'tax_id', editProjectCode: 'project_code', editDocumentType: 'document_type' };
+  return names[id] || id;
+}
+
 function registerAutoSave(ids, autoFolder, autoFileName) {
   ids.forEach((id) => {
-    $(id).addEventListener('change', () => {
-      saveCurrent(autoFolder, autoFileName).catch((error) => showToast(error.message, true));
+    const element = $(id);
+    if (!element) return;
+    element.addEventListener('change', () => {
+      saveCurrent(autoFolder, autoFileName, metadataFieldName(id))
+        .catch((error) => showToast(error.message, true));
     });
   });
 }
 
-registerAutoSave(['lot', 'address', 'editProjectCode', 'editDocumentType', 'taxMap', 'parcel', 'taxId'], true, true);
+registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'editProjectCode', 'editDocumentType'], true, true);
 registerAutoSave(['folderName', 'fileName'], false, false);
 
 $('scanButton').addEventListener('click', scan);
 $('fileButton').addEventListener('click', fileCurrent);
 $('fileAllButton').addEventListener('click', fileAll);
 
+/*This is the final connection between python, html, and javascript.
+*/
 loadState().catch((error) => showToast(error.message, true));
 
 

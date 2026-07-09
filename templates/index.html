@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PaddleOCR Review Queue</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260615-1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260709-2">
 </head>
 
 <body>
@@ -26,30 +26,22 @@
         <h2>Folders</h2>
         <label>Input folder<input id="inputFolder" type="text" placeholder="S:"></label>
         <button type="button" onclick="openFolderBrowser('inputFolder')">Browse Input</button>
-        <div id="folderBrowserModal" class="hidden">
-          <h3>Select Folder</h3>
-          <div id="browseCurrentPath"></div>
-          <div id="browseFolderList"></div>
-          <button type="button" id="useFolderButton">Use this folder</button>
-          <button type="button"
-            onclick="document.getElementById('folderBrowserModal').classList.add('hidden')">Cancel</button>
-        </div>
+
         <label>Output folder<input id="outputFolder" type="text" placeholder="S:"></label>
-        <button onclick="openFolderBrowser('outputFolder')">Browse Output</button>
+        <button type="button" onclick="openFolderBrowser('outputFolder')">Browse Output</button>
+
         <div id="folderBrowserModal" class="hidden">
           <h3>Select Folder</h3>
           <div id="browseCurrentPath"></div>
           <div id="browseFolderList"></div>
           <button type="button" id="useFolderButton">Use this folder</button>
-          <button type="button"
-            onclick="document.getElementById('folderBrowserModal').classList.add('hidden')">Cancel</button>
+          <button type="button" onclick="document.getElementById('folderBrowserModal').classList.add('hidden')">Cancel</button>
         </div>
+
         <label>Config file<input id="configPath" type="text" placeholder="Optional config.json"></label>
-        
+        <label>Project code<input id="projectCode" type="text" placeholder="Leave blank to detect from output folder"></label>
+
         <div class="setting-grid">
-          <label>Project code<input id="projectCode" type="text" value="Project"></label>
-          <label>Document type<input id="documentType" type="text" value="Document"></label>
-          <label>Language<input id="lang" type="text" value="en"></label>
           <label>DPI<input id="dpi" type="number" value="300" min="72" max="400"></label>
           <label>OCR device
             <select id="ocrDevice">
@@ -58,9 +50,6 @@
               <option value="cpu">CPU</option>
             </select>
           </label>
-          <label>GPU ID<input id="gpuDeviceId" type="number" value="0" min="0" max="8"></label>
-          <label>CPU workers<input id="ocrWorkers" type="number" value="1" min="1" max="8"></label>
-          <label>CPU threads/worker<input id="ocrThreadsPerWorker" type="number" value="4" min="1" max="20"></label>
         </div>
       </section>
 
@@ -96,11 +85,20 @@
           <div class="form-grid">
             <label>Lot number<input id="lot" type="text"></label>
             <label>Address<input id="address" type="text"></label>
-            <label>Project code<input id="editProjectCode" type="text"></label>
-            <label>Document type<input id="editDocumentType" type="text"></label>
             <label>Tax map<input id="taxMap" type="text"></label>
             <label>Parcel<input id="parcel" type="text"></label>
             <label>Tax ID<input id="taxId" type="text"></label>
+            <label>Project code<input id="editProjectCode" type="text"></label>
+            <label>Document type
+              <select id="editDocumentType">
+                <option value="House Location">House Location</option>
+                <option value="Site Plan">Site Plan</option>
+                <option value="Wall Check">Wall Check</option>
+                <option value="Field Notes">Field Notes</option>
+                <option value="Replat">Replat</option>
+                <option value="Document">Document</option>
+              </select>
+            </label>
           </div>
 
           <div class="destination-box">
@@ -123,9 +121,11 @@
 
   <div id="toast" class="toast hidden"></div>
   <!--This script tag is what connects this HTML file and the app.js file
-  which is defined in the static folder in this project directory. It
+  which is defined in the static folder in this project directory. 
+  When render_template("index.html") reaches this tag it opens and runs
+  app.js.
   -->
-  <script src="{{ url_for('static', filename='app.js') }}?v=20260615-1"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20260709-2"></script>
 </body>
 
 </html>
