@@ -100,7 +100,7 @@ function parseJsonResponse(bodyText, response) {
 }
 
 function statusLabel(document) {
-  const labels = { filed: 'Filed', ready: 'Ready', needs_review: 'Needs review' };
+  const labels = { filed: 'Filed', ready: 'Ready', needs_review: 'Needs review', lookup_only: 'Lookup only' };
   return labels[document.status] || 'Needs review';
 }
 
@@ -124,10 +124,10 @@ function batchWarnings() {
   const required = [
     ['lot', 'Lot'], ['address', 'Address'], ['project_code', 'Project code'],
     ['document_type', 'Document type'], ['tax_map', 'Tax map'],
-    ['parcel', 'Parcel'], ['tax_id', 'Tax ID'],
+    ['parcel', 'Parcel'], ['tax_id', 'Tax ID'], ['section', 'Section'],
   ];
 
-  state.documents.forEach((document) => {
+  state.documents.filter((document) => !document.is_lookup_document).forEach((document) => {
     const type = (document.metadata?.document_type || '').trim();
     if (type && type !== 'Document' && !type.toLowerCase().startsWith('unknown')) {
       if (!typeGroups.has(type)) typeGroups.set(type, []);
@@ -164,9 +164,10 @@ function renderBatchWarnings() {
 function renderList() {
   const list = $('documentList');
   list.innerHTML = '';
-  $('queueCount').textContent = String(state.documents.length);
+  const visibleDocuments = state.documents.filter((document) => !document.is_lookup_document);
+  $('queueCount').textContent = String(visibleDocuments.length);
 
-  state.documents.forEach((item) => {
+  visibleDocuments.forEach((item) => {
     const button = document.createElement('button');
     button.className = `doc-row ${item.id === state.selectedId ? 'active' : ''}`;
     button.innerHTML = `<strong>${item.source_name}</strong><span>${statusLabel(item)}</span>`;
@@ -215,7 +216,7 @@ function applyState(data) {
   if (fields.ocrDevice) fields.ocrDevice.value = state.settings.ocr_device || 'auto';
 
   if (!state.documents.some((document) => document.id === state.selectedId)) {
-    state.selectedId = state.documents[0]?.id || null;
+    state.selectedId = state.documents.find((document) => !document.is_lookup_document)?.id || null;
   }
 
   renderList();
@@ -265,7 +266,7 @@ async function scan() {
       method: 'POST',
       body: JSON.stringify(scanPayload()),
     });
-    state.selectedId = data.documents?.[0]?.id || null;
+    state.selectedId = data.documents?.find((document) => !document.is_lookup_document)?.id || null;
     applyState(data);
     showToast(`Scanned ${state.documents.length} PDF${state.documents.length === 1 ? '' : 's'}.`);
   } catch (error) {

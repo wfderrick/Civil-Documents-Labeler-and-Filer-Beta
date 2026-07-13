@@ -62,3 +62,15 @@ not_field_notes:  20–50 PDFs
 ```
 
 After training, keep `visual_field_notes_classifier.joblib` beside `app.py`, then restart the Flask app.
+
+## SDAT lookup-only records
+
+The pipeline recognizes printed Maryland SDAT Real Property Data Search pages by their header and account-identification anchors. These pages are treated as lookup-only documents:
+
+- Only the district and account number are extracted.
+- The resulting Tax ID is given priority over OCR-voted map/parcel/address values.
+- SDAT fills the shared lot, address, tax map, parcel, Tax ID, and section.
+- Lookup-only records are hidden from the normal review queue and are not filed.
+- After all permanent documents file successfully, lookup-only source PDFs are moved to the Windows Recycle Bin (or deleted if Recycle Bin support is unavailable).
+
+Property synchronization priority is Tax ID first, then address. Editing Tax ID or address refreshes all shared property fields except project code and document type.

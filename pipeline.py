@@ -27,6 +27,14 @@ from visual_classifier import FIELD_NOTES_LABEL, classify_pdf_visual
 
 DEFAULT_TITLE_BLOCK_CROP = (0.55, 0.65, 1.0, 1.0)
 DOCUMENT_TYPE_THRESHOLD = 0.75
+LOOKUP_DOCUMENT_TYPE = "SDAT Property Record"
+SDAT_LOOKUP_ANCHORS = (
+    "department of assessments and taxation",
+    "real property data search",
+    "account identifier",
+    "account number",
+    "premises address",
+)
 SDAT_API_URL = "https://opendata.maryland.gov/resource/ed4q-f8tm.json"
 
 INVALID_PATH_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -39,6 +47,7 @@ SDAT_FIELDS = {
     "lot": "lot_mdp_field_lot_sdat_field_41",
     "map": "map_mdp_field_map_sdat_field_42",
     "parcel": "parcel_mdp_field_parcel_sdat_field_44",
+    "section": "section_mdp_field_section_sdat_field_39",
     "premise_number": "premise_address_number_mdp_field_premsnum_sdat_field_20",
     "premise_name": "premise_address_name_mdp_field_premsnam_sdat_field_23",
     "premise_type": "premise_address_type_mdp_field_premstyp_sdat_field_24",
@@ -667,19 +676,58 @@ def extract_tax_id_parts(tax_id: str) -> tuple[str, str]:
     return "", ""
 
 
+def is_sdat_lookup_document(text: str) -> bool:
+    """Identify an SDAT printout using several stable page anchors."""
+    normalized = normalize_for_fuzzy(text)
+    hits = sum(normalize_for_fuzzy(anchor) in normalized for anchor in SDAT_LOOKUP_ANCHORS)
+    strong_header = (
+        normalize_for_fuzzy("department of assessments and taxation") in normalized
+        and normalize_for_fuzzy("real property data search") in normalized
+    )
+    account_block = (
+        normalize_for_fuzzy("account identifier") in normalized
+        and normalize_for_fuzzy("account number") in normalized
+    )
+    return (strong_header and account_block) or hits >= 4
+
+
+def extract_sdat_lookup_tax_id(text: str) -> tuple[str, str, str] | None:
+    """Extract district/account from an SDAT printout and build its Tax ID."""
+    patterns = (
+        r"\bdistrict\s*[-:#]?\s*([0-9Oo]{1,2})\s+account\s+(?:number|no\.?|#)\s*[-:#]?\s*([0-9OoIl]{4,10})\b",
+        r"\baccount\s+identifier.{0,80}?district\s*[-:#]?\s*([0-9Oo]{1,2}).{0,80}?account\s+(?:number|no\.?|#)\s*[-:#]?\s*([0-9OoIl]{4,10})\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        if not match:
+            continue
+        district = re.sub(r"\D", "", normalize_ocr_numbers(match.group(1))).zfill(2)
+        account = re.sub(r"\D", "", normalize_ocr_numbers(match.group(2))).zfill(6)
+        if district and account:
+            return district, account, f"{district}-{account}"
+    return None
+
+
 def extract_metadata(text: str, config: Config, default_project_code: str, default_document_type: str) -> ExtractedMetadata:
+    if is_sdat_lookup_document(text):
+        lookup = extract_sdat_lookup_tax_id(text)
+        tax_id = lookup[2] if lookup else ""
+        return ExtractedMetadata(
+            lot="Unknown Lot",
+            address="Unknown Address",
+            project_code=safe_path_part(default_project_code, "Project"),
+            document_type=LOOKUP_DOCUMENT_TYPE,
+            tax_id=tax_id,
+        )
+
     doc_match = fuzzy_document_type(text, config.get("document_type_keywords"))
     document_type = doc_match.label if doc_match else first_match(text, config.get("document_type_patterns", [])) or default_document_type
-
-    # Use ORIGINAL text for lot search so "Lot" is not changed to "10t"
+    # Preserve the original lot technique: search only after the detected document type.
     lot_search_text = text[doc_match.start:] if doc_match else text
     lot = first_match(lot_search_text, config.get("lot_pattern", [])) or "Unknown Lot"
-
-    # Use OCR-number normalization for numeric identifiers only.
     tax_map = first_match(text, config.get("map_patterns", []), normalize_numbers=False) or ""
     parcel = first_match(text, config.get("parcel_patterns", []), normalize_numbers=True) or ""
     tax_id = first_match(text, config.get("tax_id_patterns", []), normalize_numbers=True) or ""
-
     return ExtractedMetadata(
         lot=safe_path_part(lot, "Unknown Lot"),
         address=safe_path_part(first_valid_address(text, config) or "Unknown Address", "Unknown Address"),
@@ -753,7 +801,7 @@ def extract_sdat_search_terms(text: str, metadata: ExtractedMetadata, config: Co
 def selected_sdat_fields() -> list[str]:
     return [
         SDAT_FIELDS["county"], SDAT_FIELDS["account_id"], SDAT_FIELDS["district"], SDAT_FIELDS["account_number"],
-        SDAT_FIELDS["lot"], SDAT_FIELDS["map"], SDAT_FIELDS["parcel"], SDAT_FIELDS["premise_number"],
+        SDAT_FIELDS["lot"], SDAT_FIELDS["map"], SDAT_FIELDS["parcel"], SDAT_FIELDS["section"], SDAT_FIELDS["premise_number"],
         SDAT_FIELDS["premise_name"], SDAT_FIELDS["premise_type"], SDAT_FIELDS["premise_city"], SDAT_FIELDS["premise_zip"],
         SDAT_FIELDS["mdp_address"], SDAT_FIELDS["mdp_city"], SDAT_FIELDS["mdp_zip"], SDAT_FIELDS["link"],
     ]
@@ -872,17 +920,20 @@ def tax_id_from_sdat_record(record: dict[str, Any]) -> str:
 
 def metadata_from_sdat_record(metadata: ExtractedMetadata, record: dict[str, Any]) -> ExtractedMetadata:
     address = format_sdat_address(record)
+    lot = normalize_value(record.get(SDAT_FIELDS["lot"], ""))
     tax_map = normalize_value(record.get(SDAT_FIELDS["map"], ""))
     parcel = normalize_value(record.get(SDAT_FIELDS["parcel"], ""))
+    section = normalize_value(record.get(SDAT_FIELDS["section"], ""))
     tax_id = tax_id_from_sdat_record(record)
     return replace(
         metadata,
+        lot=safe_path_part(lot, metadata.lot) if lot else metadata.lot,
         address=safe_path_part(address, metadata.address) if address else metadata.address,
         tax_map=safe_path_part(tax_map, "") if tax_map else metadata.tax_map,
         parcel=safe_path_part(parcel, "") if parcel else metadata.parcel,
         tax_id=safe_path_part(tax_id, "") if tax_id else metadata.tax_id,
+        section=safe_path_part(section, "") if section else metadata.section,
     )
-
 
 def _address_tokens(address: str) -> tuple[str, list[str]]:
     cleaned = re.sub(r"[^0-9A-Za-z ]", " ", str(address or "")).upper()
@@ -1010,45 +1061,41 @@ def choose_batch_metadata_by_vote(
     default_project_code: str,
     default_document_type: str,
 ) -> tuple[dict[str, str], list[ExtractedMetadata]]:
-    """Vote once across the batch for shared metadata.
-
-    Lot selection keeps the original technique inside extract_metadata(): the lot
-    search starts at the detected document-type index, so random surrounding lot
-    labels are less likely to win. Tax map, parcel, and tax ID are also shared
-    across the batch so the best document can supply them for all related files.
-    """
     votes = extract_document_metadata_votes(scanned_documents, config, default_project_code, default_document_type)
-    votes = fix_duplicate_document_types_with_visual_classifier(votes, scanned_documents, config)
+    lookup_indexes = [i for i, vote in enumerate(votes) if vote.document_type == LOOKUP_DOCUMENT_TYPE]
+    normal_indexes = [i for i in range(len(votes)) if i not in lookup_indexes]
 
+    normal_votes = [votes[i] for i in normal_indexes]
+    normal_docs = [scanned_documents[i] for i in normal_indexes]
+    if normal_votes:
+        fixed = fix_duplicate_document_types_with_visual_classifier(normal_votes, normal_docs, config)
+        for index, vote in zip(normal_indexes, fixed):
+            votes[index] = vote
+        normal_votes = fixed
+
+    # Priority: lookup-record Tax ID, then OCR-voted Tax ID, then address/map/parcel.
+    lookup_tax_ids = [votes[i].tax_id for i in lookup_indexes if is_known_value(votes[i].tax_id)]
     shared = {
-        "lot": vote_for_value((vote.lot for vote in votes), "Unknown Lot"),
-        "address": vote_for_value((vote.address for vote in votes), "Unknown Address"),
-        "tax_map": vote_for_value((vote.tax_map for vote in votes), ""),
-        "parcel": vote_for_value((vote.parcel for vote in votes), ""),
-        "tax_id": vote_for_value((vote.tax_id for vote in votes), ""),
-        "section": vote_for_value((vote.section for vote in votes), ""),
+        "lot": vote_for_value((vote.lot for vote in normal_votes), "Unknown Lot"),
+        "address": vote_for_value((vote.address for vote in normal_votes), "Unknown Address"),
+        "tax_map": vote_for_value((vote.tax_map for vote in normal_votes), ""),
+        "parcel": vote_for_value((vote.parcel for vote in normal_votes), ""),
+        "tax_id": lookup_tax_ids[0] if lookup_tax_ids else vote_for_value((vote.tax_id for vote in normal_votes), ""),
+        "section": vote_for_value((vote.section for vote in normal_votes), ""),
     }
 
-    # Do one SDAT lookup after voting instead of one lookup per document.
-    if config.get("sdat_lookup", True):
-        seed = replace(
-            votes[0] if votes else ExtractedMetadata("Unknown Lot", "Unknown Address", default_project_code, default_document_type),
-            lot=shared["lot"],
-            address=shared["address"],
-            tax_map=shared["tax_map"],
-            parcel=shared["parcel"],
-            tax_id=shared["tax_id"],
-            section=shared.get("section", ""),
-        )
+    if config.get("sdat_lookup", True) and (shared["tax_id"] or shared["address"] or shared["tax_map"] or shared["parcel"]):
+        seed_source = normal_votes[0] if normal_votes else ExtractedMetadata("Unknown Lot", "Unknown Address", default_project_code, default_document_type)
+        seed = replace(seed_source, **shared)
+        # Tax ID is authoritative. Clear competing identifiers before its lookup.
+        if shared["tax_id"]:
+            seed = replace(seed, tax_map="", parcel="")
         batch_text = "\n".join(document.get("ocr_text", "") for document in scanned_documents)
         enriched = enrich_metadata_with_sdat(seed, batch_text, config)
-        shared["address"] = prefer_known(enriched.address, shared["address"])
-        shared["tax_map"] = prefer_known(enriched.tax_map, shared["tax_map"])
-        shared["parcel"] = prefer_known(enriched.parcel, shared["parcel"])
-        shared["tax_id"] = prefer_known(enriched.tax_id, shared["tax_id"])
+        for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section"):
+            shared[field] = prefer_known(getattr(enriched, field), shared[field])
 
     return shared, votes
-
 
 def merge_batch_metadata(
     document_text: str,

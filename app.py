@@ -20,6 +20,7 @@ from flask import Flask, jsonify, redirect, render_template, request, send_file,
 
 from pipeline import (
     ExtractedMetadata,
+    LOOKUP_DOCUMENT_TYPE,
     choose_batch_metadata_by_vote,
     enrich_metadata_with_sdat,
     lookup_maryland_property_by_address,
@@ -143,7 +144,7 @@ def normalize_document(document: dict[str, Any]) -> dict[str, Any]:
     document.setdefault(
         "file_name", suggested_filename(metadata, document["source_name"])
     )
-    document["status"] = document_status(metadata)
+    document["status"] = "lookup_only" if document.get("is_lookup_document") else document_status(metadata)
     return document
 
 
@@ -242,33 +243,30 @@ def scan_batch(
     documents: list[dict[str, Any]] = []
     print("Begin normalizing documents")
     for scanned_document, metadata_vote in zip(scanned, metadata_votes):
-        metadata = asdict(
-            merge_batch_metadata(
-                document_text=scanned_document["ocr_text"],
-                config=config,
-                default_project_code=settings["project_code"],
-                default_document_type=settings["document_type"],
-                shared_metadata=shared_metadata,
-                document_metadata=metadata_vote,
-            )
+        is_lookup = metadata_vote.document_type == LOOKUP_DOCUMENT_TYPE
+        final_metadata = metadata_vote if is_lookup else merge_batch_metadata(
+            document_text=scanned_document["ocr_text"],
+            config=config,
+            default_project_code=settings["project_code"],
+            default_document_type=settings["document_type"],
+            shared_metadata=shared_metadata,
+            document_metadata=metadata_vote,
         )
-        documents.append(
-            normalize_document(
-                {
-                    "id": uuid.uuid4().hex,
-                    "source_path": scanned_document["source_path"],
-                    "source_name": scanned_document["source_name"],
-                    "ocr_text": scanned_document["ocr_text"],
-                    "ocr_pages": scanned_document.get("ocr_pages", []),
-                    "metadata": metadata,
-                    "filed_path": "",
-                }
-            )
-        )
+        documents.append(normalize_document({
+            "id": uuid.uuid4().hex,
+            "source_path": scanned_document["source_path"],
+            "source_name": scanned_document["source_name"],
+            "ocr_text": scanned_document["ocr_text"],
+            "ocr_pages": scanned_document.get("ocr_pages", []),
+            "metadata": asdict(final_metadata),
+            "is_lookup_document": is_lookup,
+            "filed_path": "",
+        }))
     print("Finished normalizing documents")
-    if documents:
-        shared_folder = suggested_folder(documents[0]["metadata"])
-        for document in documents:
+    normal_documents = [document for document in documents if not document.get("is_lookup_document")]
+    if normal_documents:
+        shared_folder = suggested_folder(normal_documents[0]["metadata"])
+        for document in normal_documents:
             document["folder_name"] = shared_folder
             document["file_name"] = suggested_filename(
                 document["metadata"], document["source_name"]
@@ -317,39 +315,29 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
 
 
 def refresh_batch_property_fields_from_sdat(state: dict[str, Any], changed_field: str) -> dict[str, str] | None:
-    """Refresh address, tax map, parcel and Tax ID from one authoritative edit."""
-    documents = state.get("documents", [])
+    """Use the edited property field as authoritative and synchronize the batch."""
+    documents = [doc for doc in state.get("documents", []) if not doc.get("is_lookup_document")]
     if not documents:
         return None
     config = load_config_from_state(state)
     if not config.get("sdat_lookup", True):
         return None
-
-    metadata_dict = documents[0].get("metadata", {})
-    seed = metadata_from_dict(metadata_dict)
+    seed = metadata_from_dict(documents[0].get("metadata", {}))
     batch_text = "\n".join(document.get("ocr_text", "") for document in documents)
 
     if changed_field == "address":
-        county = str(config.get("default_county", "") or "")
-        records = lookup_maryland_property_by_address(seed.address, county=county)
+        records = lookup_maryland_property_by_address(seed.address, county=str(config.get("default_county", "") or ""))
         enriched = metadata_from_sdat_record(seed, records[0]) if records else seed
     else:
-        # Ignore stale competing identifiers when the user changes one field.
+        # Tax ID has highest priority; clear stale address/map/parcel before querying it.
         if changed_field == "tax_id":
-            seed = replace(seed, tax_map="", parcel="")
-        elif changed_field == "tax_map":
-            seed = replace(seed, tax_id="")
-        elif changed_field == "parcel":
-            seed = replace(seed, tax_id="")
+            seed = replace(seed, address="Unknown Address", tax_map="", parcel="", lot="Unknown Lot", section="")
+        elif changed_field in {"tax_map", "parcel", "section"}:
+            seed = replace(seed, tax_id="", address="Unknown Address")
         enriched = enrich_metadata_with_sdat(seed, batch_text, config)
 
-    values = {
-        "address": enriched.address,
-        "tax_map": enriched.tax_map,
-        "parcel": enriched.parcel,
-        "tax_id": enriched.tax_id,
-    }
-    if is_unknown(values["address"]):
+    values = {field: getattr(enriched, field) for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section")}
+    if not any(not is_unknown(str(value)) for value in values.values()):
         return None
     for batch_document in documents:
         batch_document["metadata"].update(values)
@@ -374,7 +362,7 @@ def apply_document_update(
 
     # If the user edits a property identifier, refresh the official SDAT address
     # once and apply that address to every document in the batch.
-    if changed_field in {"tax_map", "parcel", "tax_id", "address"}:
+    if changed_field in {"tax_map", "parcel", "tax_id", "address", "section"}:
         refresh_batch_property_fields_from_sdat(state, changed_field)
 
     # Keep non-shared fields document-specific if they are ever posted by older UI/state.
@@ -749,6 +737,8 @@ def api_file_document(document_id: str):
     document = find_document(state, document_id)
     if not document:
         return api_error("Document not found", 404)
+    if document.get("is_lookup_document"):
+        return api_error("Lookup-only SDAT records are removed after the batch is filed.", 400)
 
     output_folder = (
         Path(state.get("settings", {}).get("output_folder", "")).expanduser().resolve()
@@ -776,41 +766,35 @@ def api_file_document(document_id: str):
 def api_file_all_documents():
     payload = request.get_json(silent=True) or {}
     state = read_state()
-    output_folder = (
-        Path(state.get("settings", {}).get("output_folder", "")).expanduser().resolve()
-    )
-    if not str(output_folder):
-        return api_error("Output folder is not configured.", 400)
-
+    output_folder = Path(state.get("settings", {}).get("output_folder", "")).expanduser().resolve()
     documents = state.get("documents", [])
-    if not documents:
-        return api_error("No documents to file.", 400)
-
-    copy_file = payload.get("copy", True)
-    save_text = payload.get("save_text", False)
-    shared_folder = documents[0].get("folder_name") or suggested_folder(
-        documents[0]["metadata"]
-    )
-
+    normal_documents = [doc for doc in documents if not doc.get("is_lookup_document")]
+    lookup_documents = [doc for doc in documents if doc.get("is_lookup_document")]
+    if not normal_documents:
+        return api_error("No permanent documents to file.", 400)
+    shared_folder = normal_documents[0].get("folder_name") or suggested_folder(normal_documents[0]["metadata"])
     filed_documents = []
     try:
-        for document in documents:
-            filed_documents.append(
-                file_document_to_output(
-                    document,
-                    output_folder,
-                    copy_file=copy_file,
-                    save_text=save_text,
-                    folder_name=shared_folder,
-                )
-            )
+        for document in normal_documents:
+            filed_documents.append(file_document_to_output(
+                document, output_folder, copy_file=payload.get("copy", True),
+                save_text=payload.get("save_text", False), folder_name=shared_folder,
+            ))
     except FileNotFoundError as error:
         return api_error(str(error), 400)
 
+    # Delete lookup-only source records only after every permanent document succeeds.
+    for lookup in lookup_documents:
+        source = Path(lookup.get("source_path", ""))
+        if source.exists():
+            try:
+                from send2trash import send2trash
+                send2trash(str(source))
+            except Exception:
+                source.unlink(missing_ok=True)
+    state["documents"] = filed_documents
     write_state(state)
-    return jsonify(
-        {"settings": state.get("settings", {}), "documents": filed_documents}
-    )
+    return jsonify({"settings": state.get("settings", {}), "documents": filed_documents})
 
 
 @app.get("/documents/<document_id>/pdf")
