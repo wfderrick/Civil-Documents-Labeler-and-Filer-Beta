@@ -14,6 +14,7 @@ const fields = {
   taxMap: $('taxMap'),
   parcel: $('parcel'),
   taxId: $('taxId'),
+  section: $('section'),
   editProjectCode: $('editProjectCode'),
   editDocumentType: $('editDocumentType'),
   folderName: $('folderName'),
@@ -117,6 +118,49 @@ function setButtonLoading(button, isLoading, loadingText, readyText) {
   button.textContent = isLoading ? loadingText : readyText;
 }
 
+function batchWarnings() {
+  const warnings = [];
+  const typeGroups = new Map();
+  const required = [
+    ['lot', 'Lot'], ['address', 'Address'], ['project_code', 'Project code'],
+    ['document_type', 'Document type'], ['tax_map', 'Tax map'],
+    ['parcel', 'Parcel'], ['tax_id', 'Tax ID'],
+  ];
+
+  state.documents.forEach((document) => {
+    const type = (document.metadata?.document_type || '').trim();
+    if (type && type !== 'Document' && !type.toLowerCase().startsWith('unknown')) {
+      if (!typeGroups.has(type)) typeGroups.set(type, []);
+      typeGroups.get(type).push(document.source_name);
+    }
+    const missing = required
+      .filter(([key]) => {
+        const value = String(document.metadata?.[key] || '').trim();
+        return !value || value.toLowerCase().startsWith('unknown') || value === 'Project' || value === 'Document';
+      })
+      .map(([, label]) => label);
+    if (missing.length) warnings.push(`${document.source_name}: missing ${missing.join(', ')}`);
+  });
+
+  typeGroups.forEach((files, type) => {
+    if (files.length > 1) warnings.unshift(`Duplicate document type “${type}”: ${files.join(', ')}`);
+  });
+  return warnings;
+}
+
+function renderBatchWarnings() {
+  const banner = $('batchWarning');
+  if (!banner) return;
+  const warnings = batchWarnings();
+  if (!warnings.length) {
+    banner.classList.add('hidden');
+    banner.innerHTML = '';
+    return;
+  }
+  banner.innerHTML = `<strong>Batch needs attention</strong><ul>${warnings.map((item) => `<li>${item}</li>`).join('')}</ul>`;
+  banner.classList.remove('hidden');
+}
+
 function renderList() {
   const list = $('documentList');
   list.innerHTML = '';
@@ -143,6 +187,7 @@ function renderSelectedDocument(document) {
   fields.taxMap.value = document.metadata.tax_map || '';
   fields.parcel.value = document.metadata.parcel || '';
   fields.taxId.value = document.metadata.tax_id || '';
+  fields.section.value = document.metadata.section || '';
   fields.editProjectCode.value = document.metadata.project_code || '';
   if (fields.editDocumentType) fields.editDocumentType.value = document.metadata.document_type || 'Document';
   fields.folderName.value = document.folder_name || '';
@@ -174,6 +219,7 @@ function applyState(data) {
   }
 
   renderList();
+  renderBatchWarnings();
   if (state.selectedId) selectDocument(state.selectedId);
 }
 
@@ -195,6 +241,7 @@ function updatePayload(autoFolder = false, autoFileName = false, changedField = 
     tax_map: fields.taxMap.value,
     parcel: fields.parcel.value,
     tax_id: fields.taxId.value,
+    section: fields.section.value,
     project_code: fields.editProjectCode.value,
     document_type: fields.editDocumentType ? fields.editDocumentType.value : '',
     folder_name: fields.folderName.value,
@@ -308,7 +355,7 @@ function registerAutoSave(ids, autoFolder, autoFileName) {
   });
 }
 
-registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'editProjectCode', 'editDocumentType'], true, true);
+registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'section', 'editProjectCode', 'editDocumentType'], true, true);
 registerAutoSave(['folderName', 'fileName'], false, false);
 
 $('scanButton').addEventListener('click', scan);

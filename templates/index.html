@@ -5,10 +5,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PaddleOCR Review Queue</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260709-2">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260713-1">
 </head>
 
 <body>
+  <div id="batchWarning" class="batch-warning hidden" role="alert"></div>
   <header class="app-header">
     <div>
       <h1>Document Review Queue</h1>
@@ -88,6 +89,7 @@
             <label>Tax map<input id="taxMap" type="text"></label>
             <label>Parcel<input id="parcel" type="text"></label>
             <label>Tax ID<input id="taxId" type="text"></label>
+            <label>Section<input id="section" type="text"></label>
             <label>Project code<input id="editProjectCode" type="text"></label>
             <label>Document type
               <select id="editDocumentType">
@@ -125,7 +127,7 @@
   When render_template("index.html") reaches this tag it opens and runs
   app.js.
   -->
-  <script src="{{ url_for('static', filename='app.js') }}?v=20260709-2"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20260713-1"></script>
 </body>
 
 </html>

@@ -12,7 +12,7 @@ try:
     import pikepdf
 except Exception:  # optional, metadata still works without it
     pikepdf = None
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,8 @@ from pipeline_fuzzy_ocr_number_fix import (
     ExtractedMetadata,
     choose_batch_metadata_by_vote,
     enrich_metadata_with_sdat,
+    lookup_maryland_property_by_address,
+    metadata_from_sdat_record,
     extract_project_code_from_output_folder,
     load_config,
     merge_batch_metadata,
@@ -42,7 +44,7 @@ STATE_FILE = APP_DIR / ".review_state" / "documents.json"
 DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
 DEFAULT_STATE: dict[str, Any] = {"settings": {}, "documents": []}
 REQUIRED_METADATA_FIELDS = ("lot", "address", "project_code", "document_type")
-OPTIONAL_METADATA_FIELDS = ("tax_map", "parcel", "tax_id")
+OPTIONAL_METADATA_FIELDS = ("tax_map", "parcel", "tax_id", "section")
 
 app = Flask("ocr_pipeline_gpu_optimized")
 ocr_engine = None
@@ -291,32 +293,57 @@ def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
         tax_map=str(metadata.get("tax_map", "")),
         parcel=str(metadata.get("parcel", "")),
         tax_id=str(metadata.get("tax_id", "")),
+        section=str(metadata.get("section", "")),
     )
 
 
-def refresh_batch_address_from_sdat(state: dict[str, Any]) -> str | None:
-    """Use the current batch tax map/parcel/tax ID to refresh the address for all documents."""
+def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
+    name = output_folder.name.strip()
+    if "." not in name:
+        return name, ""
+    project_code, section = name.split(".", 1)
+    return project_code.strip(), section.strip()
+
+
+def refresh_batch_property_fields_from_sdat(state: dict[str, Any], changed_field: str) -> dict[str, str] | None:
+    """Refresh address, tax map, parcel and Tax ID from one authoritative edit."""
     documents = state.get("documents", [])
     if not documents:
         return None
-
     config = load_config_from_state(state)
     if not config.get("sdat_lookup", True):
         return None
 
-    seed_metadata = metadata_from_dict(documents[0].get("metadata", {}))
+    metadata_dict = documents[0].get("metadata", {})
+    seed = metadata_from_dict(metadata_dict)
     batch_text = "\n".join(document.get("ocr_text", "") for document in documents)
-    enriched = enrich_metadata_with_sdat(seed_metadata, batch_text, config)
 
-    if is_unknown(enriched.address):
+    if changed_field == "address":
+        county = str(config.get("default_county", "") or "")
+        records = lookup_maryland_property_by_address(seed.address, county=county)
+        enriched = metadata_from_sdat_record(seed, records[0]) if records else seed
+    else:
+        # Ignore stale competing identifiers when the user changes one field.
+        if changed_field == "tax_id":
+            seed = replace(seed, tax_map="", parcel="")
+        elif changed_field == "tax_map":
+            seed = replace(seed, tax_id="")
+        elif changed_field == "parcel":
+            seed = replace(seed, tax_id="")
+        enriched = enrich_metadata_with_sdat(seed, batch_text, config)
+
+    values = {
+        "address": enriched.address,
+        "tax_map": enriched.tax_map,
+        "parcel": enriched.parcel,
+        "tax_id": enriched.tax_id,
+    }
+    if is_unknown(values["address"]):
         return None
-
     for batch_document in documents:
-        batch_document["metadata"]["address"] = enriched.address
+        batch_document["metadata"].update(values)
         refresh_document_names(batch_document, auto_folder=True, auto_file_name=True)
-
-    return enriched.address
-
+    return values
 
 def apply_document_update(
     state: dict[str, Any], document: dict[str, Any], payload: dict[str, Any]
@@ -325,7 +352,7 @@ def apply_document_update(
 
     # These are batch-level values. If the user corrects one file, apply the
     # correction to every document in the current batch.
-    shared_field_names = ("lot", "address", "tax_map", "parcel", "tax_id", "project_code")
+    shared_field_names = ("lot", "address", "tax_map", "parcel", "tax_id", "section", "project_code")
     shared_updates = {field: payload[field] for field in shared_field_names if field in payload}
     changed_field = payload.get("changed_field", "")
 
@@ -336,8 +363,8 @@ def apply_document_update(
 
     # If the user edits a property identifier, refresh the official SDAT address
     # once and apply that address to every document in the batch.
-    if changed_field in {"tax_map", "parcel", "tax_id"}:
-        refresh_batch_address_from_sdat(state)
+    if changed_field in {"tax_map", "parcel", "tax_id", "address"}:
+        refresh_batch_property_fields_from_sdat(state, changed_field)
 
     # Keep non-shared fields document-specific if they are ever posted by older UI/state.
     for field in (*REQUIRED_METADATA_FIELDS, *OPTIONAL_METADATA_FIELDS):
@@ -373,6 +400,7 @@ def metadata_keyword_text(document: dict[str, Any]) -> str:
         "tax_map": metadata.get("tax_map", ""),
         "parcel": metadata.get("parcel", ""),
         "tax_id": metadata.get("tax_id", ""),
+        "section": metadata.get("section", ""),
         "source_name": document.get("source_name", ""),
         "filed_at": datetime.now().isoformat(timespec="seconds"),
     }
@@ -491,6 +519,7 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
                     "coa:TaxMap": metadata.get("tax_map", ""),
                     "coa:Parcel": metadata.get("parcel", ""),
                     "coa:TaxID": metadata.get("tax_id", ""),
+                    "coa:Section": metadata.get("section", ""),
                     "coa:OriginalFileName": document.get("source_name", ""),
                     "coa:FiledAt": datetime.now().isoformat(timespec="seconds"),
                     "coa:Application": "COA Barrett File Identifier and Sorter",
@@ -643,14 +672,15 @@ def api_scan():
         Path(settings["config_path"]).resolve() if settings["config_path"] else None
     )
     config = load_config(config_path if config_path and config_path.exists() else None)
+    detected_project_code, detected_section = _folder_project_and_section(output_folder)
+    settings["section"] = detected_section
     manual_project_code = (settings.get("project_code") or "").strip()
     if manual_project_code:
         settings["project_code"] = safe_path_part(manual_project_code.upper(), "Project")
         settings["project_code_override"] = settings["project_code"]
     else:
-        settings["project_code"] = extract_project_code_from_output_folder(
-            output_folder,
-            config,
+        settings["project_code"] = safe_path_part(
+            detected_project_code or extract_project_code_from_output_folder(output_folder, config, "Project"),
             "Project",
         )
         settings["project_code_override"] = ""
@@ -673,6 +703,9 @@ def api_scan():
         "settings": settings,
         "documents": scan_batch(input_folder, ocr, config, settings),
     }
+    if settings.get("section"):
+        for document in state["documents"]:
+            document["metadata"]["section"] = settings["section"]
 
     write_state(state)
     return jsonify(state)

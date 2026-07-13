@@ -94,7 +94,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "document_type_patterns": [r"\s(wall check|site plan|field notes|replat|house location)\s"],
 }
 
-OCR_CONFUSION_MAP = str.maketrans({"0": "o", "1": "l", "I": "l", "|": "l", "!": "l", "5": "s", "$": "s", "3": "e", "@": "a", "8": "b", "6": "g", "2": "z"})
+OCR_CONFUSION_MAP = str.maketrans({"0": "o", "1": "l", "I": "l", "|": "l", "!": "l", "5": "s", "$": "s", "3": "e", "@": "a", "8": "b", "6": "g", "2": "z", "+": "t"})
 
 # Used for metadata identifiers like Tax ID, tax map, parcel, district, and account number.
 # This intentionally maps common letter-like OCR mistakes back to digits.
@@ -125,6 +125,7 @@ class ExtractedMetadata:
     tax_map: str = ""
     parcel: str = ""
     tax_id: str = ""
+    section: str = ""
 
 
 @dataclass(frozen=True)
@@ -845,14 +846,60 @@ def format_sdat_address(record: dict[str, Any]) -> str:
     return " ".join(part for part in [street_address, city, "MD", zip_code] if part).strip() if street_address else ""
 
 
+def tax_id_from_sdat_record(record: dict[str, Any]) -> str:
+    district = normalize_value(record.get(SDAT_FIELDS["district"], ""))
+    account = normalize_value(record.get(SDAT_FIELDS["account_number"], ""))
+    if district and account:
+        return f"{district.zfill(2)}-{account.zfill(6)}"
+    return ""
+
+
+def metadata_from_sdat_record(metadata: ExtractedMetadata, record: dict[str, Any]) -> ExtractedMetadata:
+    address = format_sdat_address(record)
+    tax_map = normalize_value(record.get(SDAT_FIELDS["map"], ""))
+    parcel = normalize_value(record.get(SDAT_FIELDS["parcel"], ""))
+    tax_id = tax_id_from_sdat_record(record)
+    return replace(
+        metadata,
+        address=safe_path_part(address, metadata.address) if address else metadata.address,
+        tax_map=safe_path_part(tax_map, "") if tax_map else metadata.tax_map,
+        parcel=safe_path_part(parcel, "") if parcel else metadata.parcel,
+        tax_id=safe_path_part(tax_id, "") if tax_id else metadata.tax_id,
+    )
+
+
+def _address_tokens(address: str) -> tuple[str, list[str]]:
+    cleaned = re.sub(r"[^0-9A-Za-z ]", " ", str(address or "")).upper()
+    parts = [part for part in cleaned.split() if part]
+    number = parts[0] if parts and parts[0].isdigit() else ""
+    stop = {"MD", "MARYLAND", "ST", "STREET", "RD", "ROAD", "DR", "DRIVE", "LN", "LANE", "CT", "COURT", "AVE", "AVENUE", "BLVD", "BOULEVARD", "WAY", "PL", "PLACE", "CIR", "CIRCLE"}
+    words = [part for part in parts[1:] if part not in stop and not part.isdigit()]
+    return number, words[:3]
+
+
+def lookup_maryland_property_by_address(address: str, county: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    number, words = _address_tokens(address)
+    if not number or not words:
+        return []
+    where = [f"{SDAT_FIELDS['premise_number']} = '{soql_escape(number)}'"]
+    where.append(f"upper({SDAT_FIELDS['mdp_address']}) like upper('%{soql_escape(words[0])}%')")
+    if county:
+        where.append(f"upper({SDAT_FIELDS['county']}) like upper('%{soql_escape(county)}%')")
+    records = sdat_get(where, limit=limit)
+    if not records:
+        return []
+    target = re.sub(r"[^A-Z0-9]", "", address.upper())
+    def score(record: dict[str, Any]) -> int:
+        candidate = re.sub(r"[^A-Z0-9]", "", format_sdat_address(record).upper())
+        return sum(1 for token in [number, *words] if token and token in candidate) + (5 if candidate == target else 0)
+    return sorted(records, key=score, reverse=True)
+
+
 def enrich_metadata_with_sdat(metadata: ExtractedMetadata, text: str, config: Config) -> ExtractedMetadata:
     if not config.get("sdat_lookup", True):
         return metadata
     records = lookup_maryland_property_records(extract_sdat_search_terms(text, metadata, config))
-    if not records:
-        return metadata
-    address = format_sdat_address(records[0])
-    return replace(metadata, address=safe_path_part(address, "Unknown Address")) if address else metadata
+    return metadata_from_sdat_record(metadata, records[0]) if records else metadata
 
 
 def is_known_value(value: str) -> bool:
@@ -959,6 +1006,7 @@ def choose_batch_metadata_by_vote(
         "tax_map": vote_for_value((vote.tax_map for vote in votes), ""),
         "parcel": vote_for_value((vote.parcel for vote in votes), ""),
         "tax_id": vote_for_value((vote.tax_id for vote in votes), ""),
+        "section": vote_for_value((vote.section for vote in votes), ""),
     }
 
     # Do one SDAT lookup after voting instead of one lookup per document.
@@ -970,6 +1018,7 @@ def choose_batch_metadata_by_vote(
             tax_map=shared["tax_map"],
             parcel=shared["parcel"],
             tax_id=shared["tax_id"],
+            section=shared.get("section", ""),
         )
         batch_text = "\n".join(document.get("ocr_text", "") for document in scanned_documents)
         enriched = enrich_metadata_with_sdat(seed, batch_text, config)
@@ -997,6 +1046,7 @@ def merge_batch_metadata(
         tax_map=prefer_known(shared_metadata.get("tax_map", ""), document_metadata.tax_map),
         parcel=prefer_known(shared_metadata.get("parcel", ""), document_metadata.parcel),
         tax_id=prefer_known(shared_metadata.get("tax_id", ""), document_metadata.tax_id),
+        section=prefer_known(shared_metadata.get("section", ""), document_metadata.section),
         project_code=safe_path_part(default_project_code, "Project"),
     )
 

@@ -269,3 +269,19 @@ pre {
   .review-pane { height: auto; min-height: 720px; grid-template-columns: 1fr; }
   .pdf-panel { min-height: 520px; border-right: 0; border-bottom: 1px solid var(--line); }
 }
+
+
+.batch-warning {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  padding: 14px 22px;
+  background: #b42318;
+  color: #fff;
+  border-bottom: 3px solid #7a271a;
+  box-shadow: 0 4px 14px rgba(0,0,0,.2);
+}
+.batch-warning strong { font-size: 16px; }
+.batch-warning ul { margin: 7px 0 0 20px; padding: 0; }
+.batch-warning li { margin: 3px 0; }
+.hidden { display: none !important; }
