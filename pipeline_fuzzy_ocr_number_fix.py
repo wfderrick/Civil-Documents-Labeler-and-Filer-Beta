@@ -881,7 +881,11 @@ def lookup_maryland_property_by_address(address: str, county: str = "", limit: i
     number, words = _address_tokens(address)
     if not number or not words:
         return []
-    where = [f"{SDAT_FIELDS['premise_number']} = '{soql_escape(number)}'"]
+    str_number = soql_escape(number)
+    add_zero = 5 - len(str_number)
+    for i in range(add_zero):
+        str_number = "0" + str_number
+    where = [f"{SDAT_FIELDS['premise_number']} = '{str_number}'"]
     where.append(f"upper({SDAT_FIELDS['mdp_address']}) like upper('%{soql_escape(words[0])}%')")
     if county:
         where.append(f"upper({SDAT_FIELDS['county']}) like upper('%{soql_escape(county)}%')")
