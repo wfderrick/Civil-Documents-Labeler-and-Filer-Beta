@@ -18,7 +18,7 @@ from typing import Any
 
 from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
 
-from pipeline_fuzzy_ocr_number_fix import (
+from pipeline import (
     ExtractedMetadata,
     choose_batch_metadata_by_vote,
     enrich_metadata_with_sdat,
@@ -98,7 +98,12 @@ def is_unknown(value: str) -> bool:
     )
 
 
-"""The suggested_folder() function """
+"""The suggested_folder() function returns a string with a suggested folder name
+based on the metadata parameter. The folder name follows the naming conventions
+Lot # - Address(ex: Lot 1 - 34 Jibsail Street). After the lot and address 
+information are pulled from the metadata parameter they are passed into the 
+safe_path_part() function imported from pipeline.py to ensure they contain only 
+allowed characters and remove extra spaces."""
 def suggested_folder(metadata: dict[str, str]) -> str:
     return safe_path_part(
         f"Lot {metadata.get('lot', '')} - {metadata.get('address', '')}",
@@ -106,6 +111,12 @@ def suggested_folder(metadata: dict[str, str]) -> str:
     )
 
 
+"""The suggested_filename() function returns a string with a suggested file name
+based on the metadata parameter. The file name follows the naming conventions
+Document Type - Lot #(ex: Site Plan - Lot 1). After the lot and address 
+information are pulled from the metadata parameter they are passed into the 
+safe_path_part() function imported from pipeline.py to ensure they contain only 
+allowed characters and remove extra spaces."""
 def suggested_filename(metadata: dict[str, str], source_name: str) -> str:
     stem = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}"
     return safe_path_part(stem, Path(source_name).stem) + ".pdf"

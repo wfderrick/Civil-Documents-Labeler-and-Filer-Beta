@@ -29,6 +29,8 @@ DEFAULT_TITLE_BLOCK_CROP = (0.55, 0.65, 1.0, 1.0)
 DOCUMENT_TYPE_THRESHOLD = 0.75
 SDAT_API_URL = "https://opendata.maryland.gov/resource/ed4q-f8tm.json"
 
+INVALID_PATH_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
 SDAT_FIELDS = {
     "county": "county_name_mdp_field_cntyname",
     "account_id": "account_id_mdp_field_acctid",
@@ -161,10 +163,17 @@ def load_config(path: Path | None) -> Config:
     config.update({key: value for key, value in user_config.items() if value not in (None, "", [])})
     return config
 
-
+"""The normalize_value() function returns a cleaned version of the value 
+parameter. To begin it calls the built in str() class on either value if it is
+not None or an empty string to convert that result to a string. The split() 
+function is called on the result of that in order to separate the non whitespace 
+characters into groups and then rejoined using the join() function called on " "
+so that each group in the list generated from split() is separated by a single 
+space in the singel string generated from the join() function.
+Then strip() is called on the result of join() to remove any leading or 
+trailing spaces and/or bad characters like :, -, #, ., ,,and/or ;. """
 def normalize_value(value: str) -> str:
-    value = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n:-#")
-    return value.rstrip(".,;")
+    return " ".join(str(value or "").split()).strip(" :-#.,;")
 
 
 def first_match(text: str, patterns: Iterable[str], *, normalize_numbers: bool = False) -> str | None:
@@ -198,11 +207,18 @@ def all_matches(text: str, patterns: Iterable[str], *, normalize_numbers: bool =
 
     return values
 
-
+"""The safe_path_part() function returns a string which represents a file or
+folder name which is allowed. To begin the normalize_value() function is called
+to remove large groups of spaces and some invalid characters. Next sub() is 
+called to substitute more invalid characters out of the string. strip() is 
+called as a final check to remove any spaces or periods at the end of a folder 
+or file name since it's not allowed in Windows. Finally a truncated version of 
+the cleaned value string is returned or if its a None type the fallback 
+parameter is returned. """
 def safe_path_part(value: str, fallback: str) -> str:
     value = normalize_value(value) or fallback
-    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", value)
-    value = re.sub(r"\s+", " ", value).strip(" .")
+    value = INVALID_PATH_RE.sub("", value)
+    value = value.strip(" .")
     return value[:140] or fallback
 
 
