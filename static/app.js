@@ -107,7 +107,10 @@ function statusLabel(document) {
   return labels[document.status] || 'Needs review';
 }
 
-
+/*The selectedDocument() function returns the document in the documents property
+in the state object that has the same id as the id stored in the selectedId 
+property in the state object. It uses the find() function which returns the 
+first value in an array for which the predicate is true.*/ 
 function selectedDocument() {
   return state.documents.find((document) => document.id === state.selectedId);
 }
@@ -198,6 +201,12 @@ function renderList() {
   });
 }
 
+/*The renderSelectedDocument() function makes the document and review pane for 
+that document given by the document parameter, visible to the user. It begins by
+adding the hidden class to the emptyState <div> to hide it and doing the 
+opposite to the reviewPane <div> to reveal it. Then the src for the pdfFrame 
+<iframe> element is set to the pdf at the address corresponding to the documents 
+folder */
 function renderSelectedDocument(document) {
   $('emptyState').classList.add('hidden');
   $('reviewPane').classList.remove('hidden');

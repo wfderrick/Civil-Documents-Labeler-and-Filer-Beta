@@ -891,6 +891,7 @@ def api_file_all_documents():
 
 @app.get("/documents/<document_id>/pdf")
 def document_pdf(document_id: str):
+    """The document_pdf() function returns """
     try:
         document = find_document(read_state(), document_id)
         if document:
