@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,28 @@ except Exception:  # pragma: no cover - optional dependency
 MODEL_PATH = Path(__file__).resolve().parent / "visual_field_notes_classifier.joblib"
 FIELD_NOTES_LABEL = "field_notes"
 NOT_FIELD_NOTES_LABEL = "not_field_notes"
+
+
+@lru_cache(maxsize=4)
+def _load_model_cached(model_path: str, modified_ns: int) -> Any:
+    """Load a joblib model once per path/version.
+
+    ``modified_ns`` is part of the cache key, so replacing or retraining the
+    model invalidates the old cached entry automatically.
+    """
+    if joblib is None:
+        return None
+    return joblib.load(model_path)
+
+
+def clear_model_cache() -> None:
+    """Clear the in-process visual classifier model cache."""
+    _load_model_cached.cache_clear()
+
+
+def _get_cached_model(model_file: Path) -> Any:
+    stat = model_file.stat()
+    return _load_model_cached(str(model_file.resolve()), stat.st_mtime_ns)
 
 
 def render_page_gray(pdf_path: Path, page_index: int = 0, dpi: int = 72) -> np.ndarray | None:
@@ -132,7 +155,7 @@ def classify_pdf_visual(pdf_path: str | Path, model_path: str | Path | None = No
     model_file = Path(model_path) if model_path else MODEL_PATH
 
     if joblib is not None and model_file.exists():
-        model = joblib.load(model_file)
+        model = _get_cached_model(model_file)
         features = visual_features(path).reshape(1, -1)
         label = str(model.predict(features)[0])
         confidence = 0.0
@@ -184,6 +207,7 @@ def train_visual_classifier(training_root: str | Path, output_model: str | Path 
     model = RandomForestClassifier(n_estimators=400, random_state=42, class_weight="balanced")
     model.fit(X_train, y_train)
     joblib.dump(model, output_model)
+    clear_model_cache()
 
     print(f"Saved binary visual field-notes classifier to {output_model}")
     print("\nTraining summary:")

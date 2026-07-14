@@ -22,6 +22,7 @@ from pipeline import (
     ExtractedMetadata,
     LOOKUP_DOCUMENT_TYPE,
     choose_batch_metadata_by_vote,
+    _lookup_by_tax_id,
     enrich_metadata_with_sdat,
     lookup_maryland_property_by_address,
     metadata_from_sdat_record,
@@ -338,7 +339,7 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
 def refresh_batch_property_fields_from_sdat(
     state: dict[str, Any], changed_field: str
 ) -> dict[str, str] | None:
-    """Use the edited property field as authoritative and synchronize the batch."""
+    """Validate the edited field with SDAT, then synchronize all property fields."""
     documents = [
         doc for doc in state.get("documents", []) if not doc.get("is_lookup_document")
     ]
@@ -347,35 +348,41 @@ def refresh_batch_property_fields_from_sdat(
     config = load_config_from_state(state)
     if not config.get("sdat_lookup", True):
         return None
+
     seed = metadata_from_dict(documents[0].get("metadata", {}))
-    batch_text = "\n".join(document.get("ocr_text", "") for document in documents)
+    county = str(config.get("default_county", "") or "")
+    records: list[dict[str, Any]] = []
 
-    if changed_field == "address":
-        records = lookup_maryland_property_by_address(
-            seed.address, county=str(config.get("default_county", "") or "")
-        )
-        enriched = metadata_from_sdat_record(seed, records[0]) if records else seed
+    if changed_field == "tax_id":
+        # Fast exact lookup. A typed Tax ID is not allowed to overwrite the batch
+        # unless SDAT confirms it.
+        records = _lookup_by_tax_id(seed.tax_id, county)
+    elif changed_field == "address":
+        records = lookup_maryland_property_by_address(seed.address, county=county, limit=25)
     else:
-        # Tax ID has highest priority; clear stale address/map/parcel before querying it.
-        if changed_field == "tax_id":
-            seed = replace(
-                seed,
-                address="Unknown Address",
-                tax_map="",
-                parcel="",
-                lot="Unknown Lot",
-                section="",
-            )
-        elif changed_field in {"tax_map", "parcel", "section"}:
-            seed = replace(seed, tax_id="", address="Unknown Address")
-        enriched = enrich_metadata_with_sdat(seed, batch_text, config)
+        # For map/parcel/section, ignore stale stronger identifiers and query only
+        # the edited property identifiers. Empty text avoids a full OCR-text join.
+        query_seed = replace(seed, tax_id="", address="Unknown Address")
+        enriched = enrich_metadata_with_sdat(query_seed, "", config)
+        if enriched != query_seed:
+            values = {
+                field: getattr(enriched, field)
+                for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section")
+            }
+            for batch_document in documents:
+                batch_document["metadata"].update(values)
+                refresh_document_names(batch_document, auto_folder=True, auto_file_name=True)
+            return values
+        return None
 
+    if not records:
+        return None
+
+    enriched = metadata_from_sdat_record(seed, records[0])
     values = {
         field: getattr(enriched, field)
         for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section")
     }
-    if not any(not is_unknown(str(value)) for value in values.values()):
-        return None
     for batch_document in documents:
         batch_document["metadata"].update(values)
         refresh_document_names(batch_document, auto_folder=True, auto_file_name=True)

@@ -79,8 +79,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         r"\bmap\s*/\s*parcel\s*[:#-]?\s*[0-9A-Za-z]+\s*/\s*([0-9A-Za-z]+)\b",
     ],
     "tax_id_patterns": [
-        r"\btax\s*(?:id|i\.?d\.?)\s*[:#.-]?\s*([0-9]{1,2})\s*[- ]\s*([0-9]{4,8})\b",
-        r"\b([0-9]{1,2})\s*[- ]\s*([0-9]{6,8})\b",
+        # Require an explicit Tax ID label. Unlabelled number pairs are common
+        # in survey notes and create dangerous false positives.
+        r"\btax\s*(?:id|i\.?d\.?|1\.?d\.?)\s*[:#.-]?\s*"
+        r"([0-9Oo]{1,2})\s*[- ]\s*([0-9OoIl]{4,8})\b",
     ],
     "district_patterns": [r"\bdistrict\s*[:#-]?\s*([0-9A-Za-z]+)\b", r"\bdist\.?\s*[:#-]?\s*([0-9A-Za-z]+)\b"],
     "account_patterns": [
@@ -90,8 +92,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "address_patterns": [
         r"\s(?:property|site|project)\s+address\s*[:#-]?\s*(.+)",
         r"\saddress\s*[:#-]?\s*(.+)",
-        r"\s(\d{1,6}\s+[A-Za-z0-9 .'-]+\s+(?:street|st\.?|road|rd\.?|avenue|ave\.?|boulevard|blvd\.?|drive|dr\.?|lane|ln\.?|court|ct\.?|circle|cir\.?|way|place|pl\.?)\b[^\n]*)",
+        r"(?<!\w)([1-9]\d{0,5}\s+[A-Za-z][A-Za-z0-9 .'-]*\s+(?:street|st\.?|road|rd\.?|avenue|ave\.?|boulevard|blvd\.?|drive|dr\.?|lane|ln\.?|court|ct\.?|circle|cir\.?|way|place|pl\.?)\b[^\n]*)",
     ],
+    "bbox_address_bottom_fraction": 0.65,
+    "bbox_address_line_tolerance": 0.75,
     "ignored_address_keywords": ["phone", "fax", "www", ".com", "@", "survey", "surveyor", "surveying", "engineer", "engineering"],
     "ignored_addresses": [],
     "project_code_patterns": [r"\s(aa|cc|ch|nav|pg|sm|usaf[0-9]{4})\s"],
@@ -258,6 +262,13 @@ def keyword_groups(raw_keywords: Any) -> dict[str, list[str]]:
 
 
 def best_keyword_window(keyword: str, normalized_text: str) -> tuple[float, int, int]:
+    """Return the best fuzzy keyword window while preserving legacy tie behavior.
+
+    Window lengths remain in ascending order and scores still use a strict ``>``
+    comparison. ``real_quick_ratio`` and ``quick_ratio`` are upper-bound pruning
+    checks, so skipping a window when either bound is less than or equal to the
+    current best cannot change the winning score or the first tie-winner.
+    """
     if not keyword or not normalized_text:
         return 0.0, -1, -1
     exact_start = normalized_text.find(keyword)
@@ -268,10 +279,22 @@ def best_keyword_window(keyword: str, normalized_text: str) -> tuple[float, int,
     min_window = max(3, keyword_length - 3)
     max_window = min(len(normalized_text), keyword_length + 4)
     best_score, best_start, best_end = 0.0, -1, -1
+
+    matcher = SequenceMatcher(None, keyword, autojunk=False)
     for window_length in range(min_window, max_window + 1):
         for start in range(0, len(normalized_text) - window_length + 1):
             end = start + window_length
-            score = fuzzy_ratio(keyword, normalized_text[start:end])
+            matcher.set_seq2(normalized_text[start:end])
+
+            # Both methods are documented upper bounds for ratio(). Because the
+            # legacy code only updates on a strict improvement, <= is safe and
+            # preserves the original first-match tie behavior exactly.
+            if matcher.real_quick_ratio() <= best_score:
+                continue
+            if matcher.quick_ratio() <= best_score:
+                continue
+
+            score = matcher.ratio()
             if score > best_score:
                 best_score, best_start, best_end = score, start, end
                 if best_score >= 0.98:
@@ -303,7 +326,110 @@ def is_ignored_address(address: str, config: Config) -> bool:
     return any(normalize_for_fuzzy(str(keyword)) in cleaned for keyword in config.get("ignored_address_keywords", []) if normalize_for_fuzzy(str(keyword)))
 
 
-def first_valid_address(text: str, config: Config) -> str | None:
+def _ocr_item_rect(item: Mapping[str, Any]) -> tuple[float, float, float, float] | None:
+    """Return an OCR item's rectangle as x0, y0, x1, y1."""
+    raw = first_nonempty_value(item.get("bbox"), item.get("polygon"))
+    if raw is None:
+        return None
+    if hasattr(raw, "tolist"):
+        raw = raw.tolist()
+    points = _points_from_any(raw)
+    if not points:
+        return None
+    x0, y0, x1, y1 = _bbox_from_points(points)
+    return x0, y0, x1, y1
+
+
+def _layout_address_lines(
+    ocr_pages: Iterable[Mapping[str, Any]],
+    *,
+    bottom_fraction: float,
+    line_tolerance: float,
+) -> list[str]:
+    """Rebuild bottom-page OCR lines from bounding boxes.
+
+    Keeping tokens on their physical line prevents an isolated OCR token from a
+    neighboring line (for example ``0``) from being prepended to a real address.
+    """
+    lines: list[str] = []
+    for page in ocr_pages or []:
+        try:
+            image_height = float(page.get("image_height") or 0)
+        except (TypeError, ValueError):
+            image_height = 0.0
+        if image_height <= 0:
+            continue
+
+        positioned: list[tuple[float, float, float, float, str]] = []
+        cutoff = image_height * max(0.0, min(1.0, bottom_fraction))
+        for item in page.get("items", []) or []:
+            text = normalize_value(item.get("text", ""))
+            rect = _ocr_item_rect(item)
+            if not text or rect is None:
+                continue
+            x0, y0, x1, y1 = rect
+            if (y0 + y1) / 2 < cutoff:
+                continue
+            positioned.append((x0, y0, x1, y1, text))
+
+        if not positioned:
+            continue
+
+        heights = sorted(max(1.0, y1 - y0) for _, y0, _, y1, _ in positioned)
+        median_height = heights[len(heights) // 2]
+        tolerance = max(3.0, median_height * max(0.25, line_tolerance))
+
+        rows: list[dict[str, Any]] = []
+        for x0, y0, x1, y1, text in sorted(positioned, key=lambda value: ((value[1] + value[3]) / 2, value[0])):
+            center_y = (y0 + y1) / 2
+            best_row = None
+            best_distance = float("inf")
+            for row in rows:
+                distance = abs(center_y - row["center_y"])
+                if distance <= tolerance and distance < best_distance:
+                    best_row = row
+                    best_distance = distance
+            if best_row is None:
+                rows.append({"center_y": center_y, "tokens": [(x0, text)]})
+            else:
+                best_row["tokens"].append((x0, text))
+                count = len(best_row["tokens"])
+                best_row["center_y"] = ((best_row["center_y"] * (count - 1)) + center_y) / count
+
+        for row in sorted(rows, key=lambda value: value["center_y"]):
+            line = " ".join(text for _, text in sorted(row["tokens"], key=lambda token: token[0]))
+            line = normalize_value(line)
+            if line:
+                lines.append(line)
+    return lines
+
+
+def first_valid_address(
+    text: str,
+    config: Config,
+    ocr_pages: Iterable[Mapping[str, Any]] | None = None,
+) -> str | None:
+    """Return a plausible address, preferring bounding-box reconstructed lines."""
+    if ocr_pages:
+        try:
+            bottom_fraction = float(config.get("bbox_address_bottom_fraction", 0.65))
+        except (TypeError, ValueError):
+            bottom_fraction = 0.65
+        try:
+            line_tolerance = float(config.get("bbox_address_line_tolerance", 0.75))
+        except (TypeError, ValueError):
+            line_tolerance = 0.75
+
+        for line in _layout_address_lines(
+            ocr_pages,
+            bottom_fraction=bottom_fraction,
+            line_tolerance=line_tolerance,
+        ):
+            for address in all_matches(line, config.get("address_patterns", [])):
+                if address and not is_ignored_address(address, config):
+                    return address
+
+    # Compatibility fallback for PDFs/results without usable bounding boxes.
     for address in all_matches(text, config.get("address_patterns", [])):
         if address and not is_ignored_address(address, config):
             return address
@@ -399,17 +525,14 @@ def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
             texts = page_result.get("rec_texts") or []
             scores = page_result.get("rec_scores") or []
             boxes = first_nonempty_value(
-            page_result.get("rec_polys"),
-            page_result.get("rec_boxes"),
-            page_result.get("dt_polys"),
-            page_result.get("boxes"),
-        )
+                page_result.get("rec_polys"),
+                page_result.get("rec_boxes"),
+                page_result.get("dt_polys"),
+                page_result.get("boxes"),
+            )
 
             for i, text in enumerate(texts):
-                item = {"text": str(text)}
-                item: dict[str, Any] = {
-                "text": str(text),
-                }
+                item: dict[str, Any] = {"text": str(text)}
                 if i < len(scores):
                     item["score"] = float(scores[i])
 
@@ -708,7 +831,13 @@ def extract_sdat_lookup_tax_id(text: str) -> tuple[str, str, str] | None:
     return None
 
 
-def extract_metadata(text: str, config: Config, default_project_code: str, default_document_type: str) -> ExtractedMetadata:
+def extract_metadata(
+    text: str,
+    config: Config,
+    default_project_code: str,
+    default_document_type: str,
+    ocr_pages: Iterable[Mapping[str, Any]] | None = None,
+) -> ExtractedMetadata:
     if is_sdat_lookup_document(text):
         lookup = extract_sdat_lookup_tax_id(text)
         tax_id = lookup[2] if lookup else ""
@@ -730,7 +859,7 @@ def extract_metadata(text: str, config: Config, default_project_code: str, defau
     tax_id = first_match(text, config.get("tax_id_patterns", []), normalize_numbers=True) or ""
     return ExtractedMetadata(
         lot=safe_path_part(lot, "Unknown Lot"),
-        address=safe_path_part(first_valid_address(text, config) or "Unknown Address", "Unknown Address"),
+        address=safe_path_part(first_valid_address(text, config, ocr_pages) or "Unknown Address", "Unknown Address"),
         project_code=safe_path_part(first_match(text, config.get("project_code_patterns", [])) or default_project_code, "Project"),
         document_type=safe_path_part(document_type, "Document"),
         tax_map=safe_path_part(tax_map, "") if tax_map else "",
@@ -780,8 +909,8 @@ def or_equals(field: str, value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)) -
 def extract_sdat_search_terms(text: str, metadata: ExtractedMetadata, config: Config) -> SdatSearchTerms:
     county = first_match(text, config.get("county_patterns", [])) or config.get("default_county", "")
     county = re.sub(r"\bcounty\b", "", str(county), flags=re.IGNORECASE).strip()
-    tax_map = metadata.tax_map or first_match(text, config.get("map_patterns", []), normalize_numbers=True) or ""
-    parcel = metadata.parcel or first_match(text, config.get("parcel_patterns", []), normalize_numbers=True) or ""
+    tax_map = metadata.tax_map or first_match(text, config.get("map_patterns", []), normalize_numbers=False) or ""
+    parcel = metadata.parcel or first_match(text, config.get("parcel_patterns", []), normalize_numbers=False) or ""
     tax_id = metadata.tax_id or first_match(text, config.get("tax_id_patterns", []), normalize_numbers=True) or ""
     district, account_number = extract_tax_id_parts(tax_id)
     district = district or first_match(text, config.get("district_patterns", []), normalize_numbers=True) or ""
@@ -996,7 +1125,16 @@ def vote_for_value(values: Iterable[str], fallback: str) -> str:
 
 
 def extract_document_metadata_votes(scanned_documents: Iterable[dict[str, Any]], config: Config, default_project_code: str, default_document_type: str) -> list[ExtractedMetadata]:
-    return [extract_metadata(document.get("ocr_text", ""), config, default_project_code, default_document_type) for document in scanned_documents]
+    return [
+        extract_metadata(
+            document.get("ocr_text", ""),
+            config,
+            default_project_code,
+            default_document_type,
+            document.get("ocr_pages", []),
+        )
+        for document in scanned_documents
+    ]
 
 
 
@@ -1055,6 +1193,34 @@ def fix_duplicate_document_types_with_visual_classifier(
     return updated
 
 
+def _lookup_by_tax_id(tax_id: str, county: str = "") -> list[dict[str, Any]]:
+    """Perform the fastest, most specific SDAT lookup for a Tax ID."""
+    district, account_number = extract_tax_id_parts(tax_id)
+    if not district or not account_number:
+        return []
+    return lookup_maryland_property_records(
+        SdatSearchTerms(
+            county=county,
+            tax_id=tax_id,
+            district=district,
+            account_number=account_number,
+        )
+    )
+
+
+def _apply_sdat_record_to_shared(
+    shared: dict[str, str],
+    seed: ExtractedMetadata,
+    record: dict[str, Any],
+) -> None:
+    resolved = metadata_from_sdat_record(seed, record)
+    # An SDAT result is authoritative for all property fields.
+    for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section"):
+        value = getattr(resolved, field)
+        if is_known_value(value):
+            shared[field] = value
+
+
 def choose_batch_metadata_by_vote(
     scanned_documents: list[dict[str, Any]],
     config: Config,
@@ -1063,7 +1229,8 @@ def choose_batch_metadata_by_vote(
 ) -> tuple[dict[str, str], list[ExtractedMetadata]]:
     votes = extract_document_metadata_votes(scanned_documents, config, default_project_code, default_document_type)
     lookup_indexes = [i for i, vote in enumerate(votes) if vote.document_type == LOOKUP_DOCUMENT_TYPE]
-    normal_indexes = [i for i in range(len(votes)) if i not in lookup_indexes]
+    lookup_index_set = set(lookup_indexes)
+    normal_indexes = [i for i in range(len(votes)) if i not in lookup_index_set]
 
     normal_votes = [votes[i] for i in normal_indexes]
     normal_docs = [scanned_documents[i] for i in normal_indexes]
@@ -1073,7 +1240,6 @@ def choose_batch_metadata_by_vote(
             votes[index] = vote
         normal_votes = fixed
 
-    # Priority: lookup-record Tax ID, then OCR-voted Tax ID, then address/map/parcel.
     lookup_tax_ids = [votes[i].tax_id for i in lookup_indexes if is_known_value(votes[i].tax_id)]
     shared = {
         "lot": vote_for_value((vote.lot for vote in normal_votes), "Unknown Lot"),
@@ -1084,16 +1250,45 @@ def choose_batch_metadata_by_vote(
         "section": vote_for_value((vote.section for vote in normal_votes), ""),
     }
 
-    if config.get("sdat_lookup", True) and (shared["tax_id"] or shared["address"] or shared["tax_map"] or shared["parcel"]):
-        seed_source = normal_votes[0] if normal_votes else ExtractedMetadata("Unknown Lot", "Unknown Address", default_project_code, default_document_type)
-        seed = replace(seed_source, **shared)
-        # Tax ID is authoritative. Clear competing identifiers before its lookup.
-        if shared["tax_id"]:
-            seed = replace(seed, tax_map="", parcel="")
-        batch_text = "\n".join(document.get("ocr_text", "") for document in scanned_documents)
-        enriched = enrich_metadata_with_sdat(seed, batch_text, config)
-        for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section"):
-            shared[field] = prefer_known(getattr(enriched, field), shared[field])
+    if not config.get("sdat_lookup", True):
+        return shared, votes
+
+    seed_source = normal_votes[0] if normal_votes else ExtractedMetadata(
+        "Unknown Lot", "Unknown Address", default_project_code, default_document_type
+    )
+    seed = replace(seed_source, **shared)
+    county = str(config.get("default_county", "") or "")
+
+    # Priority 1: explicit Tax ID (lookup record first, then labelled OCR Tax ID).
+    # Never trust a regex match until SDAT confirms it.
+    if is_known_value(shared["tax_id"]):
+        records = _lookup_by_tax_id(shared["tax_id"], county)
+        if records:
+            _apply_sdat_record_to_shared(shared, seed, records[0])
+            return shared, votes
+        # Reject an unconfirmed OCR Tax ID so it cannot block the correct address.
+        shared["tax_id"] = ""
+        seed = replace(seed, tax_id="")
+
+    # Priority 2: address. This is one targeted API request and avoids rescanning
+    # or joining the full batch OCR text.
+    if is_known_value(shared["address"]):
+        records = lookup_maryland_property_by_address(shared["address"], county=county, limit=25)
+        if records:
+            _apply_sdat_record_to_shared(shared, seed, records[0])
+            return shared, votes
+
+    # Priority 3: map/parcel fallback only when stronger identifiers failed.
+    if shared["tax_map"] or shared["parcel"]:
+        terms = SdatSearchTerms(
+            county=county,
+            lot="" if str(shared["lot"]).lower().startswith("unknown") else shared["lot"],
+            tax_map=shared["tax_map"],
+            parcel=shared["parcel"],
+        )
+        records = lookup_maryland_property_records(terms)
+        if records:
+            _apply_sdat_record_to_shared(shared, seed, records[0])
 
     return shared, votes
 

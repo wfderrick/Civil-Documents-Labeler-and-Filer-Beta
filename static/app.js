@@ -68,7 +68,8 @@ function showToast(message, isError = false) {
 /*The requestJson() function returns the current state data takes in a url and 
 using the fetch() function processes the returned data from the given url. This 
 function makes a GET /api/state request to the Flask object which then calls the 
-api_state function to return a json file */
+api_state() function in app.py to return a Response object as a json file 
+holding the current settings and document metadata. */
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
