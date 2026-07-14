@@ -162,7 +162,7 @@ function renderBatchWarnings() {
 function renderList() {
   const list = $('documentList');
   list.innerHTML = '';
-  const visibleDocuments = state.documents.filter((document) => !document.is_lookup_document);
+  const visibleDocuments = state.documents;
   $('queueCount').textContent = String(visibleDocuments.length);
 
   visibleDocuments.forEach((item) => {
@@ -188,11 +188,14 @@ function renderSelectedDocument(document) {
   fields.taxId.value = document.metadata.tax_id || '';
   fields.section.value = document.metadata.section || '';
   fields.editProjectCode.value = document.metadata.project_code || '';
-  if (fields.editDocumentType) fields.editDocumentType.value = document.metadata.document_type || 'Document';
+  if (fields.editDocumentType) fields.editDocumentType.value = document.metadata.document_type || 'Field Notes';
   fields.folderName.value = document.folder_name || '';
   fields.fileName.value = document.file_name || '';
   $('ocrText').textContent = document.ocr_text || '';
-  $('fileButton').disabled = document.status === 'filed';
+  $('fileButton').disabled = document.status === 'filed' || document.is_lookup_document;
+  $('fileButton').title = document.is_lookup_document
+    ? 'Lookup-only documents are removed after the permanent batch is filed.'
+    : '';
 }
 
 function selectDocument(id) {
@@ -214,7 +217,7 @@ function applyState(data) {
   if (fields.ocrDevice) fields.ocrDevice.value = state.settings.ocr_device || 'auto';
 
   if (!state.documents.some((document) => document.id === state.selectedId)) {
-    state.selectedId = state.documents.find((document) => !document.is_lookup_document)?.id || null;
+    state.selectedId = state.documents[0]?.id || null;
   }
 
   renderList();
@@ -264,7 +267,7 @@ async function scan() {
       method: 'POST',
       body: JSON.stringify(scanPayload()),
     });
-    state.selectedId = data.documents?.find((document) => !document.is_lookup_document)?.id || null;
+    state.selectedId = data.documents?.[0]?.id || null;
     applyState(data);
     showToast(`Scanned ${state.documents.length} PDF${state.documents.length === 1 ? '' : 's'}.`);
   } catch (error) {

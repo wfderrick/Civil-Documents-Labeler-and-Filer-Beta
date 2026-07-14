@@ -191,7 +191,7 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "config_path": (payload.get("config_path") or str(DEFAULT_CONFIG_PATH)).strip(),
         "project_code": (payload.get("project_code") or "").strip(),
         "project_code_override": (payload.get("project_code") or "").strip(),
-        "document_type": "Document",
+        "document_type": "Field Notes",
         "lang": "en",
         "dpi": int(payload.get("dpi") or 300),
         "ocr_device": payload.get("ocr_device") or "auto",
@@ -426,6 +426,13 @@ def apply_document_update(
     for field in (*REQUIRED_METADATA_FIELDS, *OPTIONAL_METADATA_FIELDS):
         if field in payload and field not in shared_updates:
             metadata[field] = payload[field]
+
+    # Keep the lookup-only behavior synchronized with the editable document type.
+    # Lookup-only documents stay visible in the review queue, but they are not
+    # filed and are removed only after the permanent batch files successfully.
+    document["is_lookup_document"] = (
+        metadata.get("document_type") == LOOKUP_DOCUMENT_TYPE
+    )
 
     if payload.get("auto_folder"):
         document["folder_name"] = suggested_folder(metadata)

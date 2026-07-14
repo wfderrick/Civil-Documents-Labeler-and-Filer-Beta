@@ -80,5 +80,7 @@
   "bbox_address_line_tolerance": 0.75,
   "tax_id_patterns": [
     "\\btax\\s*(?:id|i\\.?d\\.?|1\\.?d\\.?)\\s*[:#.-]?\\s*([0-9Oo]{1,2})\\s*[- ]\\s*([0-9OoIl]{4,8})\\b"
-  ]
+  ],
+  "default_document_type": "Field Notes",
+  "lookup_document_type": "Lookup Only"
 }

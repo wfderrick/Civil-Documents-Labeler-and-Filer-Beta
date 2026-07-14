@@ -27,7 +27,7 @@ from visual_classifier import FIELD_NOTES_LABEL, classify_pdf_visual
 
 DEFAULT_TITLE_BLOCK_CROP = (0.55, 0.65, 1.0, 1.0)
 DOCUMENT_TYPE_THRESHOLD = 0.75
-LOOKUP_DOCUMENT_TYPE = "SDAT Property Record"
+LOOKUP_DOCUMENT_TYPE = "Lookup Only"
 SDAT_LOOKUP_ANCHORS = (
     "department of assessments and taxation",
     "real property data search",
@@ -850,7 +850,13 @@ def extract_metadata(
         )
 
     doc_match = fuzzy_document_type(text, config.get("document_type_keywords"))
-    document_type = doc_match.label if doc_match else first_match(text, config.get("document_type_patterns", [])) or default_document_type
+    document_type = (
+        doc_match.label
+        if doc_match
+        else first_match(text, config.get("document_type_patterns", []))
+        or default_document_type
+        or "Field Notes"
+    )
     # Preserve the original lot technique: search only after the detected document type.
     lot_search_text = text[doc_match.start:] if doc_match else text
     lot = first_match(lot_search_text, config.get("lot_pattern", [])) or "Unknown Lot"
@@ -861,7 +867,7 @@ def extract_metadata(
         lot=safe_path_part(lot, "Unknown Lot"),
         address=safe_path_part(first_valid_address(text, config, ocr_pages) or "Unknown Address", "Unknown Address"),
         project_code=safe_path_part(first_match(text, config.get("project_code_patterns", [])) or default_project_code, "Project"),
-        document_type=safe_path_part(document_type, "Document"),
+        document_type=safe_path_part(document_type, "Field Notes"),
         tax_map=safe_path_part(tax_map, "") if tax_map else "",
         parcel=safe_path_part(parcel, "") if parcel else "",
         tax_id=safe_path_part(tax_id, "") if tax_id else "",

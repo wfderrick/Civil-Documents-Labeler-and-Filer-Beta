@@ -74,3 +74,10 @@ The pipeline recognizes printed Maryland SDAT Real Property Data Search pages by
 - After all permanent documents file successfully, lookup-only source PDFs are moved to the Windows Recycle Bin (or deleted if Recycle Bin support is unavailable).
 
 Property synchronization priority is Tax ID first, then address. Editing Tax ID or address refreshes all shared property fields except project code and document type.
+
+
+## Document type defaults and lookup records
+
+- Documents whose type cannot be identified default to **Field Notes**.
+- SDAT printouts are labeled **Lookup Only** and remain visible in the review queue.
+- Lookup Only documents are not filed; they are removed after all permanent documents file successfully.
