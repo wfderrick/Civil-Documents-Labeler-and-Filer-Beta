@@ -55,15 +55,17 @@ ocr_language = None
 
 """FUNCTION DEFINITION SECTION"""
 
+
 def api_error(message: str, status_code: int = 500):
     return jsonify({"error": message}), status_code
 
-"""The read_state() function returns all of the current settings and 
-document metadata stored in the documents.json file which is in the 
-.review_state folder in the project directory. If that file has not
-been created yet it returns a default dictionary with empty settings
-and documents."""
+
 def read_state() -> dict[str, Any]:
+    """The read_state() function returns all of the current settings and
+    document metadata stored in the documents.json file which is in the
+    .review_state folder in the project directory. If that file has not
+    been created yet it returns a default dictionary with empty settings
+    and documents."""
     if not STATE_FILE.exists():
         return dict(DEFAULT_STATE)
     with STATE_FILE.open("r", encoding="utf-8") as state_file:
@@ -99,26 +101,26 @@ def is_unknown(value: str) -> bool:
     )
 
 
-"""The suggested_folder() function returns a string with a suggested folder name
-based on the metadata parameter. The folder name follows the naming conventions
-Lot # - Address(ex: Lot 1 - 34 Jibsail Street). After the lot and address 
-information are pulled from the metadata parameter they are passed into the 
-safe_path_part() function imported from pipeline.py to ensure they contain only 
-allowed characters and remove extra spaces."""
 def suggested_folder(metadata: dict[str, str]) -> str:
+    """The suggested_folder() function returns a string with a suggested folder name
+    based on the metadata parameter. The folder name follows the naming conventions
+    Lot # - Address(ex: Lot 1 - 34 Jibsail Street). After the lot and address
+    information are pulled from the metadata parameter they are passed into the
+    safe_path_part() function imported from pipeline.py to ensure they contain only
+    allowed characters and remove extra spaces."""
     return safe_path_part(
         f"Lot {metadata.get('lot', '')} - {metadata.get('address', '')}",
         "Unknown Lot - Unknown Address",
     )
 
 
-"""The suggested_filename() function returns a string with a suggested file name
-based on the metadata parameter. The file name follows the naming conventions
-Document Type - Lot #(ex: Site Plan - Lot 1). After the lot and address 
-information are pulled from the metadata parameter they are passed into the 
-safe_path_part() function imported from pipeline.py to ensure they contain only 
-allowed characters and remove extra spaces."""
 def suggested_filename(metadata: dict[str, str], source_name: str) -> str:
+    """The suggested_filename() function returns a string with a suggested file name
+    based on the metadata parameter. The file name follows the naming conventions
+    Document Type - Lot #(ex: Site Plan - Lot 1). After the lot and address
+    information are pulled from the metadata parameter they are passed into the
+    safe_path_part() function imported from pipeline.py to ensure they contain only
+    allowed characters and remove extra spaces."""
     stem = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}"
     return safe_path_part(stem, Path(source_name).stem) + ".pdf"
 
@@ -133,18 +135,22 @@ def document_status(metadata: dict[str, str]) -> str:
     )
 
 
-"""The normalize_document() function returns a checked/corrected document
-dictionary. The folder_name, file_name, and status fields are checked, and 
-if empty or wrong corrected via the suggested_folder(), 
-suggested_filename(), and document_status() functions to match the metadata 
-gathered from the file."""
 def normalize_document(document: dict[str, Any]) -> dict[str, Any]:
+    """The normalize_document() function returns a checked/corrected document
+    dictionary. The folder_name, file_name, and status fields are checked, and
+    if empty or wrong corrected via the suggested_folder(),
+    suggested_filename(), and document_status() functions to match the metadata
+    gathered from the file."""
     metadata = document["metadata"]
     document.setdefault("folder_name", suggested_folder(metadata))
     document.setdefault(
         "file_name", suggested_filename(metadata, document["source_name"])
     )
-    document["status"] = "lookup_only" if document.get("is_lookup_document") else document_status(metadata)
+    document["status"] = (
+        "lookup_only"
+        if document.get("is_lookup_document")
+        else document_status(metadata)
+    )
     return document
 
 
@@ -175,8 +181,12 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
     # Keep advanced/default settings in code/config instead of exposing them in the UI.
     return {
-        "input_folder": str(resolve_folder(input_folder_raw)) if input_folder_raw else "",
-        "output_folder": str(resolve_folder(output_folder_raw)) if output_folder_raw else "",
+        "input_folder": (
+            str(resolve_folder(input_folder_raw)) if input_folder_raw else ""
+        ),
+        "output_folder": (
+            str(resolve_folder(output_folder_raw)) if output_folder_raw else ""
+        ),
         "config_path": (payload.get("config_path") or str(DEFAULT_CONFIG_PATH)).strip(),
         "project_code": (payload.get("project_code") or "").strip(),
         "project_code_override": (payload.get("project_code") or "").strip(),
@@ -189,6 +199,7 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "ocr_workers": 1,
         "ocr_threads_per_worker": 4,
     }
+
 
 def scan_batch(
     input_folder: Path, ocr, config: dict[str, Any], settings: dict[str, Any]
@@ -244,26 +255,36 @@ def scan_batch(
     print("Begin normalizing documents")
     for scanned_document, metadata_vote in zip(scanned, metadata_votes):
         is_lookup = metadata_vote.document_type == LOOKUP_DOCUMENT_TYPE
-        final_metadata = metadata_vote if is_lookup else merge_batch_metadata(
-            document_text=scanned_document["ocr_text"],
-            config=config,
-            default_project_code=settings["project_code"],
-            default_document_type=settings["document_type"],
-            shared_metadata=shared_metadata,
-            document_metadata=metadata_vote,
+        final_metadata = (
+            metadata_vote
+            if is_lookup
+            else merge_batch_metadata(
+                document_text=scanned_document["ocr_text"],
+                config=config,
+                default_project_code=settings["project_code"],
+                default_document_type=settings["document_type"],
+                shared_metadata=shared_metadata,
+                document_metadata=metadata_vote,
+            )
         )
-        documents.append(normalize_document({
-            "id": uuid.uuid4().hex,
-            "source_path": scanned_document["source_path"],
-            "source_name": scanned_document["source_name"],
-            "ocr_text": scanned_document["ocr_text"],
-            "ocr_pages": scanned_document.get("ocr_pages", []),
-            "metadata": asdict(final_metadata),
-            "is_lookup_document": is_lookup,
-            "filed_path": "",
-        }))
+        documents.append(
+            normalize_document(
+                {
+                    "id": uuid.uuid4().hex,
+                    "source_path": scanned_document["source_path"],
+                    "source_name": scanned_document["source_name"],
+                    "ocr_text": scanned_document["ocr_text"],
+                    "ocr_pages": scanned_document.get("ocr_pages", []),
+                    "metadata": asdict(final_metadata),
+                    "is_lookup_document": is_lookup,
+                    "filed_path": "",
+                }
+            )
+        )
     print("Finished normalizing documents")
-    normal_documents = [document for document in documents if not document.get("is_lookup_document")]
+    normal_documents = [
+        document for document in documents if not document.get("is_lookup_document")
+    ]
     if normal_documents:
         shared_folder = suggested_folder(normal_documents[0]["metadata"])
         for document in normal_documents:
@@ -314,9 +335,13 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     return project_code.strip(), section.strip()
 
 
-def refresh_batch_property_fields_from_sdat(state: dict[str, Any], changed_field: str) -> dict[str, str] | None:
+def refresh_batch_property_fields_from_sdat(
+    state: dict[str, Any], changed_field: str
+) -> dict[str, str] | None:
     """Use the edited property field as authoritative and synchronize the batch."""
-    documents = [doc for doc in state.get("documents", []) if not doc.get("is_lookup_document")]
+    documents = [
+        doc for doc in state.get("documents", []) if not doc.get("is_lookup_document")
+    ]
     if not documents:
         return None
     config = load_config_from_state(state)
@@ -326,23 +351,36 @@ def refresh_batch_property_fields_from_sdat(state: dict[str, Any], changed_field
     batch_text = "\n".join(document.get("ocr_text", "") for document in documents)
 
     if changed_field == "address":
-        records = lookup_maryland_property_by_address(seed.address, county=str(config.get("default_county", "") or ""))
+        records = lookup_maryland_property_by_address(
+            seed.address, county=str(config.get("default_county", "") or "")
+        )
         enriched = metadata_from_sdat_record(seed, records[0]) if records else seed
     else:
         # Tax ID has highest priority; clear stale address/map/parcel before querying it.
         if changed_field == "tax_id":
-            seed = replace(seed, address="Unknown Address", tax_map="", parcel="", lot="Unknown Lot", section="")
+            seed = replace(
+                seed,
+                address="Unknown Address",
+                tax_map="",
+                parcel="",
+                lot="Unknown Lot",
+                section="",
+            )
         elif changed_field in {"tax_map", "parcel", "section"}:
             seed = replace(seed, tax_id="", address="Unknown Address")
         enriched = enrich_metadata_with_sdat(seed, batch_text, config)
 
-    values = {field: getattr(enriched, field) for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section")}
+    values = {
+        field: getattr(enriched, field)
+        for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section")
+    }
     if not any(not is_unknown(str(value)) for value in values.values()):
         return None
     for batch_document in documents:
         batch_document["metadata"].update(values)
         refresh_document_names(batch_document, auto_folder=True, auto_file_name=True)
     return values
+
 
 def apply_document_update(
     state: dict[str, Any], document: dict[str, Any], payload: dict[str, Any]
@@ -351,14 +389,26 @@ def apply_document_update(
 
     # These are batch-level values. If the user corrects one file, apply the
     # correction to every document in the current batch.
-    shared_field_names = ("lot", "address", "tax_map", "parcel", "tax_id", "section", "project_code")
-    shared_updates = {field: payload[field] for field in shared_field_names if field in payload}
+    shared_field_names = (
+        "lot",
+        "address",
+        "tax_map",
+        "parcel",
+        "tax_id",
+        "section",
+        "project_code",
+    )
+    shared_updates = {
+        field: payload[field] for field in shared_field_names if field in payload
+    }
     changed_field = payload.get("changed_field", "")
 
     if shared_updates:
         for batch_document in state.get("documents", []):
             batch_document["metadata"].update(shared_updates)
-            refresh_document_names(batch_document, auto_folder=True, auto_file_name=True)
+            refresh_document_names(
+                batch_document, auto_folder=True, auto_file_name=True
+            )
 
     # If the user edits a property identifier, refresh the official SDAT address
     # once and apply that address to every document in the batch.
@@ -386,7 +436,6 @@ def apply_document_update(
         )
 
     return normalize_document(document)
-
 
 
 def metadata_keyword_text(document: dict[str, Any]) -> str:
@@ -477,13 +526,15 @@ def add_paddle_searchable_text_layer(pdf_path: Path, document: dict[str, Any]) -
 def write_standard_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
     metadata = document.get("metadata", {})
     with fitz.open(pdf_path) as pdf:
-        pdf.set_metadata({
-            **pdf.metadata, # type: ignore
-            "title": f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}",
-            "subject": metadata.get("address", ""),
-            "keywords": metadata_keyword_text(document),
-            "creator": "COA Barrett File Identifier and Sorter",
-        })
+        pdf.set_metadata(
+            {
+                **pdf.metadata,  # type: ignore
+                "title": f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}",
+                "subject": metadata.get("address", ""),
+                "keywords": metadata_keyword_text(document),
+                "creator": "COA Barrett File Identifier and Sorter",
+            }
+        )
         pdf.saveIncr()
 
 
@@ -503,7 +554,9 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
                 except Exception:
                     pass
 
-                title = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}".strip(" -")
+                title = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}".strip(
+                    " -"
+                )
                 if title:
                     meta["dc:title"] = title
                 if metadata.get("address"):
@@ -590,9 +643,11 @@ def file_document_to_output(
     )
     return document
 
+
 """-----------------------------------------------------------------------------------------------"""
 
 """FLASK APP COMMUNICATION SECTION"""
+
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
@@ -601,29 +656,33 @@ def handle_unexpected_error(error):
         return api_error(str(error) or "Unexpected server error")
     raise error
 
-"""Using the @app.get("/") decorator index() is called when a user opens
-or reloads the browser address. index() returns the render_template()
-function imported from Flask with index.html as the only parameter.
-When render_template() is called it automatically searches the project
-directory(aka the drectory app.py is in) for a folder named templates
-containing HTML files index.html is the chosen name for this app, but
-it can be named anything. Render_template then opens and runs the HTML
-contained in index.html."""
+
 @app.get("/")
 def index():
+    """Using the @app.get("/") decorator index() is called when a user opens
+    or reloads the browser address. index() returns the render_template()
+    function imported from Flask with index.html as the only parameter.
+    When render_template() is called it automatically searches the project
+    directory(aka the drectory app.py is in) for a folder named templates
+    containing HTML files index.html is the chosen name for this app, but
+    it can be named anything. Render_template then opens and runs the HTML
+    contained in index.html."""
     return render_template("index.html")
+
 
 @app.get("/favicon.ico")
 def favicon():
     return "", 204
 
 
-"""The api_state() function returns a Response object holding the current 
-settings and documents. The read_state() function retrieves the settings
-and documents from the documents.json file in the .review_state folder in 
-project directory. """
 @app.get("/api/state")
 def api_state():
+    """The api_state() function returns a Response object holding the current
+    settings and documents. The read_state() function retrieves the settings
+    and documents from the documents.json file in the .review_state folder in
+    project directory. Each document is then checked and corrected version based
+    on the metadata contained in the documents.json file. jsonify() is then
+    called on the """
     state = read_state()
     state["documents"] = [
         normalize_document(document) for document in state.get("documents", [])
@@ -675,11 +734,16 @@ def api_scan():
     settings["section"] = detected_section
     manual_project_code = (settings.get("project_code") or "").strip()
     if manual_project_code:
-        settings["project_code"] = safe_path_part(manual_project_code.upper(), "Project")
+        settings["project_code"] = safe_path_part(
+            manual_project_code.upper(), "Project"
+        )
         settings["project_code_override"] = settings["project_code"]
     else:
         settings["project_code"] = safe_path_part(
-            detected_project_code or extract_project_code_from_output_folder(output_folder, config, "Project"),
+            detected_project_code
+            or extract_project_code_from_output_folder(
+                output_folder, config, "Project"
+            ),
             "Project",
         )
         settings["project_code_override"] = ""
@@ -738,7 +802,9 @@ def api_file_document(document_id: str):
     if not document:
         return api_error("Document not found", 404)
     if document.get("is_lookup_document"):
-        return api_error("Lookup-only SDAT records are removed after the batch is filed.", 400)
+        return api_error(
+            "Lookup-only SDAT records are removed after the batch is filed.", 400
+        )
 
     output_folder = (
         Path(state.get("settings", {}).get("output_folder", "")).expanduser().resolve()
@@ -766,20 +832,29 @@ def api_file_document(document_id: str):
 def api_file_all_documents():
     payload = request.get_json(silent=True) or {}
     state = read_state()
-    output_folder = Path(state.get("settings", {}).get("output_folder", "")).expanduser().resolve()
+    output_folder = (
+        Path(state.get("settings", {}).get("output_folder", "")).expanduser().resolve()
+    )
     documents = state.get("documents", [])
     normal_documents = [doc for doc in documents if not doc.get("is_lookup_document")]
     lookup_documents = [doc for doc in documents if doc.get("is_lookup_document")]
     if not normal_documents:
         return api_error("No permanent documents to file.", 400)
-    shared_folder = normal_documents[0].get("folder_name") or suggested_folder(normal_documents[0]["metadata"])
+    shared_folder = normal_documents[0].get("folder_name") or suggested_folder(
+        normal_documents[0]["metadata"]
+    )
     filed_documents = []
     try:
         for document in normal_documents:
-            filed_documents.append(file_document_to_output(
-                document, output_folder, copy_file=payload.get("copy", True),
-                save_text=payload.get("save_text", False), folder_name=shared_folder,
-            ))
+            filed_documents.append(
+                file_document_to_output(
+                    document,
+                    output_folder,
+                    copy_file=payload.get("copy", True),
+                    save_text=payload.get("save_text", False),
+                    folder_name=shared_folder,
+                )
+            )
     except FileNotFoundError as error:
         return api_error(str(error), 400)
 
@@ -789,12 +864,15 @@ def api_file_all_documents():
         if source.exists():
             try:
                 from send2trash import send2trash
+
                 send2trash(str(source))
             except Exception:
                 source.unlink(missing_ok=True)
     state["documents"] = filed_documents
     write_state(state)
-    return jsonify({"settings": state.get("settings", {}), "documents": filed_documents})
+    return jsonify(
+        {"settings": state.get("settings", {}), "documents": filed_documents}
+    )
 
 
 @app.get("/documents/<document_id>/pdf")
