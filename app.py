@@ -616,7 +616,7 @@ def write_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
 def file_document_to_output(
     document: dict[str, Any],
     output_folder: Path,
-    copy_file: bool = True,
+    copy_file: bool = False,
     save_text: bool = False,
     folder_name: str | None = None,
     file_name: str | None = None,
@@ -830,7 +830,7 @@ def api_file_document(document_id: str):
         filed = file_document_to_output(
             document,
             output_folder,
-            copy_file=payload.get("copy", True),
+            copy_file=payload.get("copy", False),
             save_text=payload.get("save_text", False),
             folder_name=payload.get("folder_name"),
             file_name=payload.get("file_name"),
@@ -864,7 +864,7 @@ def api_file_all_documents():
                 file_document_to_output(
                     document,
                     output_folder,
-                    copy_file=payload.get("copy", True),
+                    copy_file=payload.get("copy", False),
                     save_text=payload.get("save_text", False),
                     folder_name=shared_folder,
                 )

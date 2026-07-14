@@ -184,3 +184,4 @@ cython_debug/
 /training_data
 OPTIMIZATION_NOTES.md
 TAX_ID_VALIDATION_NOTES.md
+/.vscode
