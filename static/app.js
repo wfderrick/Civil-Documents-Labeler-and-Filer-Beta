@@ -86,6 +86,11 @@ async function requestJson(url, options = {}) {
   return data || {};
 }
 
+/*The parseJSONResponse() function returns an object holding the information from
+the bodytext parameter. The function first checks that bodytext is valid and 
+then trys to parse it as a JSON using the JSON.parse() function. If successful 
+the object returned by the parse() function is returned otehrwise an error is 
+thrown.*/
 function parseJsonResponse(bodyText, response) {
   if (!bodyText) return null;
 
@@ -101,6 +106,7 @@ function statusLabel(document) {
   const labels = { filed: 'Filed', ready: 'Ready', needs_review: 'Needs review', lookup_only: 'Lookup only' };
   return labels[document.status] || 'Needs review';
 }
+
 
 function selectedDocument() {
   return state.documents.find((document) => document.id === state.selectedId);
@@ -159,6 +165,24 @@ function renderBatchWarnings() {
   banner.classList.remove('hidden');
 }
 
+/*The renderlist() function adds buttons to access and edit documents with 
+information is stored in documents.json. The list variable stores a pointer to 
+the <div> element with the documentList id in index.html. .innerhtml is then 
+called to remove any leftover items inside the <div> with id=documentList. The 
+visibleDocuments variable is set to a pointer to the documents property of the 
+state object. The textContent() function is called on the <span> with 
+id=queuecount in order to set the text within it to the number of documents in 
+the state object via visibleDocuments.length. For every document a button is 
+created by the createElement() function which generates different HTML elements 
+based on the parameter passed in. That button has its class set to 
+doc-row.active which makes the CSS update the color of the button to show that 
+this specific document is the current active document. A span is then added to
+the internals of the button with its name and status with the innerHTML 
+function. Next the button is set so that whenever it is clicked the 
+selectDocument() function is called on that specific items id using the 
+addEventListener() function. Finally the buttons created in the forEach loop are 
+added to the list of children which belong to the <div> with id=documentList 
+with the .appendChild() function. */
 function renderList() {
   const list = $('documentList');
   list.innerHTML = '';
@@ -198,6 +222,7 @@ function renderSelectedDocument(document) {
     : '';
 }
 
+/**/
 function selectDocument(id) {
   state.selectedId = id;
   const document = selectedDocument();
@@ -205,6 +230,8 @@ function selectDocument(id) {
   if (document) renderSelectedDocument(document);
 }
 
+/*The applyState() function updates the values held in the index.html elements
+*/
 function applyState(data) {
   state.documents = data.documents || [];
   state.settings = data.settings || {};
@@ -254,6 +281,7 @@ function updatePayload(autoFolder = false, autoFileName = false, changedField = 
   };
 }
 
+/*The loatState() function updates the fields in */
 async function loadState() {
   applyState(await requestJson('/api/state'));
 }
