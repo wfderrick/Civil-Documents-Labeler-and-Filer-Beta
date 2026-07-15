@@ -891,7 +891,9 @@ def api_file_all_documents():
 
 @app.get("/documents/<document_id>/pdf")
 def document_pdf(document_id: str):
-    """The document_pdf() function returns """
+    """The document_pdf() function returns a response object which holds a pdf
+    with either a selected document or file-not-found.pdf if there is 
+    an error."""
     try:
         document = find_document(read_state(), document_id)
         if document:
@@ -900,10 +902,14 @@ def document_pdf(document_id: str):
                 mimetype="application/pdf",
                 as_attachment=False,
             )
-        return redirect(url_for("index"))
+        return send_file(
+            Path("file-not-found.pdf"),
+            mimetype="application/pdf",
+            as_attachment=False,
+        )
     except FileNotFoundError:
         return send_file(
-            Path("file-cant-found-2.pdf"),
+            Path("file-not-found.pdf"),
             mimetype="application/pdf",
             as_attachment=False,
         )

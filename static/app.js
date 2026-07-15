@@ -89,7 +89,7 @@ async function requestJson(url, options = {}) {
 /*The parseJSONResponse() function returns an object holding the information from
 the bodytext parameter. The function first checks that bodytext is valid and 
 then trys to parse it as a JSON using the JSON.parse() function. If successful 
-the object returned by the parse() function is returned otehrwise an error is 
+the object returned by the parse() function is returned otherwise an error is 
 thrown.*/
 function parseJsonResponse(bodyText, response) {
   if (!bodyText) return null;
