@@ -16,7 +16,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file, url_for
+from flask import Flask, jsonify, redirect, render_template, request, send_file
 
 from pipeline import (
     ExtractedMetadata,
@@ -156,6 +156,10 @@ def normalize_document(document: dict[str, Any]) -> dict[str, Any]:
 
 
 def find_document(state: dict[str, Any], document_id: str) -> dict[str, Any] | None:
+    """The find_document() function returns the document in the state parameter
+    with id matching the document_id parameter or None if there aren't any 
+    documents in the state parameter with an id that matches the document_id 
+    parameter."""
     return next(
         (doc for doc in state.get("documents", []) if doc.get("id") == document_id),
         None,
@@ -882,10 +886,10 @@ def api_file_all_documents():
                 send2trash(str(source))
             except Exception:
                 source.unlink(missing_ok=True)
-    state["documents"] = filed_documents
+    state["documents"] = []
     write_state(state)
     return jsonify(
-        {"settings": state.get("settings", {}), "documents": filed_documents}
+        {"settings": state.get("settings", {}), "documents": []}
     )
 
 
@@ -893,7 +897,14 @@ def api_file_all_documents():
 def document_pdf(document_id: str):
     """The document_pdf() function returns a response object which holds a pdf
     with either a selected document or file-not-found.pdf if there is 
-    an error."""
+    an error. It begins by trying to run find_document() with parameters 
+    read_state() and document_id. If a document is found matching those 
+    parameters it's information is returned otherwise None is returned. If that
+    is successful the function returns a Response object via the send_file() 
+    function with the path to the document, document type, and as_attachment
+    parameters. If this sends an error or if the find_document() function 
+    returned none the file-not-found.pdf file in the project directory is 
+    displayed via the send_file() function."""
     try:
         document = find_document(read_state(), document_id)
         if document:

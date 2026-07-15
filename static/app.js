@@ -65,7 +65,7 @@ function showToast(message, isError = false) {
 }
 
 
-/*The requestJson() function returns the current state data takes in a url and 
+/**The requestJson() function returns the current state data takes in a url and 
 using the fetch() function processes the returned data from the given url. This 
 function makes a GET /api/state request to the Flask object which then calls the 
 api_state() function in app.py to return a Response object as a json file 
@@ -86,7 +86,7 @@ async function requestJson(url, options = {}) {
   return data || {};
 }
 
-/*The parseJSONResponse() function returns an object holding the information from
+/**The parseJSONResponse() function returns an object holding the information from
 the bodytext parameter. The function first checks that bodytext is valid and 
 then trys to parse it as a JSON using the JSON.parse() function. If successful 
 the object returned by the parse() function is returned otherwise an error is 
@@ -102,12 +102,14 @@ function parseJsonResponse(bodyText, response) {
   }
 }
 
+/**The statusLabel() function returns a beautified version of the current status
+label stored in the status field in the document parameter.*/
 function statusLabel(document) {
   const labels = { filed: 'Filed', ready: 'Ready', needs_review: 'Needs review', lookup_only: 'Lookup only' };
   return labels[document.status] || 'Needs review';
 }
 
-/*The selectedDocument() function returns the document in the documents property
+/**The selectedDocument() function returns the document in the documents property
 in the state object that has the same id as the id stored in the selectedId 
 property in the state object. It uses the find() function which returns the 
 first value in an array for which the predicate is true.*/ 
@@ -125,13 +127,30 @@ function setButtonLoading(button, isLoading, loadingText, readyText) {
   button.textContent = isLoading ? loadingText : readyText;
 }
 
+/**The batchwarnings() function returns the possible problems for the document
+ * batch in the state object. First it goes through each document that is not
+ * a Lookup Only document. For every document it checks that the document has an 
+ * acceptable type. If it does the function checks if the typeGroups Map 
+ * variable has an element with a key matching the type, if it doesn't then an
+ * element is added with that type as the key. Then the document name is added 
+ * to the element with the corresponding type key in typegroups. For each 
+ * document the required fields are looped through, and the metadata is checked 
+ * to see if that document has the required fields. If they don't filter keeps
+ * the required fields and returns them. map() takes the output of filter() and 
+ * returns just the labels. This return is what missing is set to. If there is 
+ * anything in missing it is added to the warnings variable along with the 
+ * document the missing information correspsonds to. Finally, each element in 
+ * typeGroups is reviewed. If any elements have more then one value in their 
+ * list a warning is added to the beginning of warnings with the duplicate
+ * document type and the file names. The warning list is returned.
+*/
 function batchWarnings() {
   const warnings = [];
   const typeGroups = new Map();
   const required = [
     ['lot', 'Lot'], ['address', 'Address'], ['project_code', 'Project code'],
     ['document_type', 'Document type'], ['tax_map', 'Tax map'],
-    ['parcel', 'Parcel'], ['tax_id', 'Tax ID'], ['section', 'Section'],
+    ['parcel', 'Parcel'], ['tax_id', 'Tax ID']
   ];
 
   state.documents.filter((document) => !document.is_lookup_document).forEach((document) => {
@@ -155,6 +174,20 @@ function batchWarnings() {
   return warnings;
 }
 
+/**The renderBatchWarnings() function displays any errors that are occuring in 
+ * the current batch of documents held in state. It begins by pointing banner to 
+ * the batchWarning <div>. Then it checks that it exists if it doesn't the 
+ * function returns nothing. Next it sets warnings to the return of 
+ * batchWarnings() which returns a list of strings with unknown document type, 
+ * multiple documents with the same type, and/or documents with missing 
+ * information. If the length of warnings is 0 the batchWarning <div> has hidden
+ * added to its class list so its not visible to the user anymore. The <div> 
+ * also has the HTML within it cleared so there are no leftover warning messages 
+ * which aren't supposed to be there. If the <div> exists and there are warnings
+ * then all of the warning are added to an unordered list within the 
+ * batchWarning <div>. Finally the hidden class is removed from the <div> to 
+ * make it visible to the user.
+*/
 function renderBatchWarnings() {
   const banner = $('batchWarning');
   if (!banner) return;
@@ -168,7 +201,7 @@ function renderBatchWarnings() {
   banner.classList.remove('hidden');
 }
 
-/*The renderlist() function adds buttons to access and edit documents with 
+/**The renderlist() function adds buttons to access and edit documents with 
 information is stored in documents.json. The list variable stores a pointer to 
 the <div> element with the documentList id in index.html. .innerhtml is then 
 called to remove any leftover items inside the <div> with id=documentList. The 
@@ -187,7 +220,8 @@ addEventListener() function. Finally the buttons created in the forEach loop are
 added to the list of children which belong to the <div> with id=documentList 
 with the .appendChild() function. */
 function renderList() {
-  const list = $('documentList');
+  if (state.selectedId){
+    const list = $('documentList');
   list.innerHTML = '';
   const visibleDocuments = state.documents;
   $('queueCount').textContent = String(visibleDocuments.length);
@@ -199,14 +233,23 @@ function renderList() {
     button.addEventListener('click', () => selectDocument(item.id));
     list.appendChild(button);
   });
+  }else{
+    $('emptyState').classList.remove('hidden');
+  }
 }
 
-/*The renderSelectedDocument() function makes the document and review pane for 
+/**The renderSelectedDocument() function makes the document and review pane for 
 that document given by the document parameter, visible to the user. It begins by
 adding the hidden class to the emptyState <div> to hide it and doing the 
-opposite to the reviewPane <div> to reveal it. Then the src for the pdfFrame 
-<iframe> element is set to the pdf at the address corresponding to the documents 
-folder */
+opposite to the reviewPane <div> to reveal it. The <iframe> element with 
+id=pdfFrame is then changed which tells the browser to make a GET request to the
+given url. This url corresponds to a decorator in app.py for the document_pdf()
+fucntion which returns a response object with the requested document in pdf 
+form. The <iframe> element displays that given pdf. The documentTitle <div> is
+updated with the source_name field in the document parameter. The documentStatus
+<div> is updated with the statusLabel() function with a nice version of the 
+documents current status. Each field is updated with the document parameter's
+metadata.*/
 function renderSelectedDocument(document) {
   $('emptyState').classList.add('hidden');
   $('reviewPane').classList.remove('hidden');
@@ -231,7 +274,15 @@ function renderSelectedDocument(document) {
     : '';
 }
 
-/**/
+/**The selectDocument() function updates the current selected document, displays 
+the document, and displays the review panel for the document. First the current
+state has its selected id updated to the id parameter. Then the document 
+variable is set to the return of selectedDocument() which returns the 
+information for the document in the state object with the same id as the 
+selectedId. renderList() updates the button for the selected document to have 
+the active class which changes its appearance so you can tell which document is
+selected. renderSelectedDocument() displays the document as a pdf and the review 
+panel for editing the document information.*/
 function selectDocument(id) {
   state.selectedId = id;
   const document = selectedDocument();
@@ -239,7 +290,19 @@ function selectDocument(id) {
   if (document) renderSelectedDocument(document);
 }
 
-/*The applyState() function updates the values held in the index.html elements
+/**The applyState() function updates the state and HTML fields from the data 
+ * parameter, then adds button to access the current documents and show the 
+ * current selected document, adds a red banner at the top of the screen to 
+ * display any problems within the batch, and display the selected document in
+ * pdf form and the review panel to edit document metadata. It does this by 
+ * taking in the data parameter and updating the state.document and 
+ * state.settings properties to be the same as data.documents and data.settings
+ * respectively. Then each field is updated from the state properties these 
+ * include input_folder and dpi. Once all of those are updated the warnings are
+ * shown by renderBatchWarnings(). If state.selectedId isn't null 
+ * selectDocument() adds button to access all of the documents in the document 
+ * property, displays the document as a pdf and shows the review panel. 
+ * Otherwise page is rendered with no documents.
 */
 function applyState(data) {
   state.documents = data.documents || [];
@@ -256,9 +319,11 @@ function applyState(data) {
     state.selectedId = state.documents[0]?.id || null;
   }
 
-  renderList();
   renderBatchWarnings();
-  if (state.selectedId) selectDocument(state.selectedId);
+  if (state.selectedId) 
+    selectDocument(state.selectedId);
+  else
+    renderList();
 }
 
 function scanPayload() {
@@ -290,7 +355,7 @@ function updatePayload(autoFolder = false, autoFileName = false, changedField = 
   };
 }
 
-/*The loatState() function updates the fields in */
+/**The loadState() function updates the fields in */
 async function loadState() {
   applyState(await requestJson('/api/state'));
 }
@@ -371,6 +436,8 @@ async function fileAll() {
 
     applyState(data);
     showToast(`Filed ${state.documents.length} PDF${state.documents.length === 1 ? '' : 's'} as one batch.`);
+    state.documents = []
+    renderList()
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -401,7 +468,7 @@ $('scanButton').addEventListener('click', scan);
 $('fileButton').addEventListener('click', fileCurrent);
 $('fileAllButton').addEventListener('click', fileAll);
 
-/*This is the final connection between python, html, and javascript.
+/**This is the final connection between python, html, and javascript.
 */
 loadState().catch((error) => showToast(error.message, true));
 
