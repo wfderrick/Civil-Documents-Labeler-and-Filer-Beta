@@ -25,6 +25,67 @@ const fields = {
 
 let browseTargetField = null;
 
+let scanProgressTimer = null;
+let renderedProgressCount = 0;
+
+function resetScanProgressPanel() {
+  const panel = $('scanProgressPanel');
+  panel.classList.remove('hidden', 'failed');
+  $('scanProgressStatus').textContent = 'Starting scan...';
+  $('scanElapsed').textContent = '0.0 s';
+  $('scanProgressMessages').innerHTML = '';
+  renderedProgressCount = 0;
+}
+
+function renderScanProgress(data) {
+  const panel = $('scanProgressPanel');
+  panel.classList.toggle('failed', Boolean(data.failed));
+  $('scanElapsed').textContent = `${Number(data.elapsed || 0).toFixed(1)} s`;
+
+  const messages = data.messages || [];
+  const container = $('scanProgressMessages');
+  for (let index = renderedProgressCount; index < messages.length; index += 1) {
+    const message = messages[index];
+    const row = document.createElement('div');
+    row.className = 'scan-progress-message';
+
+    const elapsed = document.createElement('span');
+    elapsed.className = 'scan-progress-time';
+    elapsed.textContent = `${Number(message.elapsed || 0).toFixed(1)} s`;
+
+    const text = document.createElement('span');
+    text.textContent = message.text || '';
+    row.append(elapsed, text);
+    container.appendChild(row);
+  }
+  renderedProgressCount = messages.length;
+  if (messages.length) $('scanProgressStatus').textContent = messages[messages.length - 1].text;
+  container.scrollTop = container.scrollHeight;
+}
+
+async function pollScanProgress() {
+  try {
+    renderScanProgress(await requestJson('/api/scan-progress'));
+  } catch (_error) {
+    // The main scan request reports actionable errors. Keep polling quietly.
+  }
+}
+
+function startScanProgressPolling() {
+  resetScanProgressPanel();
+  clearInterval(scanProgressTimer);
+  pollScanProgress();
+  scanProgressTimer = setInterval(pollScanProgress, 250);
+}
+
+async function stopScanProgressPolling({ failed = false } = {}) {
+  clearInterval(scanProgressTimer);
+  scanProgressTimer = null;
+  await pollScanProgress();
+  if (failed) $('scanProgressPanel').classList.add('failed');
+  setTimeout(() => $('scanProgressPanel').classList.add('hidden'), failed ? 0 : 0);
+}
+
 async function openFolderBrowser(targetFieldId, startPath = '') {
   browseTargetField = targetFieldId;
   await loadBrowseFolder(startPath || fields[targetFieldId].value);
@@ -402,6 +463,8 @@ async function loadState() {
 async function scan() {
   const button = $('scanButton');
   setButtonLoading(button, true, 'Scanning...', 'Scan PDFs');
+  startScanProgressPolling();
+  let scanFailed = false;
 
   try {
     const data = await requestJson('/api/scan', {
@@ -412,8 +475,10 @@ async function scan() {
     applyState(data);
     showToast(`Scanned ${state.documents.length} PDF${state.documents.length === 1 ? '' : 's'}.`);
   } catch (error) {
+    scanFailed = true;
     showToast(error.message, true);
   } finally {
+    await stopScanProgressPolling({ failed: scanFailed });
     setButtonLoading(button, false, 'Scanning...', 'Scan PDFs');
   }
 }

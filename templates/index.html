@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PaddleOCR Review Queue</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260713-1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260716-1">
 </head>
 
 <body>
@@ -20,6 +20,18 @@
       <button id="fileAllButton">File Batch</button>
     </div>
   </header>
+
+  <section id="scanProgressPanel" class="scan-progress-panel hidden" aria-live="polite">
+    <div class="scan-progress-header">
+      <div>
+        <h2>Scan Progress</h2>
+        <p id="scanProgressStatus">Preparing scan...</p>
+      </div>
+      <span id="scanElapsed">0.0 s</span>
+    </div>
+    <div class="scan-progress-bar"><div id="scanProgressBar"></div></div>
+    <div id="scanProgressMessages" class="scan-progress-messages"></div>
+  </section>
 
   <main class="layout">
     <aside class="sidebar">
@@ -127,7 +139,7 @@
   When render_template("index.html") reaches this tag it opens and runs
   app.js.
   -->
-  <script src="{{ url_for('static', filename='app.js') }}?v=20260713-1"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=20260716-1"></script>
 </body>
 
 </html>

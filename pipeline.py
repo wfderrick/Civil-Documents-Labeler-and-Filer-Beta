@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import fitz
@@ -163,11 +163,15 @@ OCR_NUMBER_MAP = str.maketrans(
 )
 
 @contextmanager
-def time_block(name):
+def time_block(name: str, progress_callback: Callable[[str], None] | None = None):
     start = time.perf_counter()
     yield
-    end = time.perf_counter()
-    print(f"[{name}] Took {end - start:.6f} seconds")
+    elapsed = time.perf_counter() - start
+    message = f"{name} in {elapsed:.2f} seconds."
+    if progress_callback:
+        progress_callback(message)
+    else:
+        print(message)
 
 def normalize_ocr_numbers(text: str) -> str:
     """Normalize OCR mistakes that commonly appear inside numeric identifiers."""
@@ -711,7 +715,10 @@ def render_pdf_pages_with_info(
     return pages
 
 
-def ocr_pdf_with_layout(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> dict[str, Any]:
+def ocr_pdf_with_layout(
+    pdf_path: Path, ocr: PaddleOCR, dpi: int,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     """The ocr_pdf_with_layout() function returns a dictionary with text from 
     the pdf located at the pdf_path parameter by the ocr pointed to by the ocr 
     parameter after being converted to images with resolution determined by the 
@@ -735,7 +742,9 @@ def ocr_pdf_with_layout(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> dict[str, A
         total = len(rendered_pages)
         num = 1
         for page_info in rendered_pages:
-            with time_block(f"Ocred page {num} of {total}"):
+            with time_block(
+                f"{pdf_path.name}: OCR page {num} of {total}", progress_callback
+            ):
                 result = ocr.predict(str(page_info["image_path"]))
             num += 1
             items = extract_ocr_items(result)
@@ -893,6 +902,7 @@ def ocr_pdf_batch(
     existing_ocr: PaddleOCR | None = None,
     ocr_device: str = "auto",
     gpu_device_id: int = 0,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """The ocr_pdf_batch() function ocrs all of the pdfs in the pdf_paths 
     parameter and returns a list of dictionaries holding the path 
@@ -916,11 +926,12 @@ def ocr_pdf_batch(
         )
         results: list[dict[str, Any]] = []
         total = len(pdf_paths)
-        num = 1
-        for pdf_path in pdf_paths:
-            print(f"PDF {num} of {total}.")
-            num += 1
-            full_ocr = ocr_pdf_with_layout(pdf_path, ocr, dpi)
+        for num, pdf_path in enumerate(pdf_paths, start=1):
+            if progress_callback:
+                progress_callback(f"Document {num} of {total}: {pdf_path.name}")
+            full_ocr = ocr_pdf_with_layout(
+                pdf_path, ocr, dpi, progress_callback=progress_callback
+            )
             full_text = full_ocr["text"]
             results.append(
                 {
@@ -947,9 +958,16 @@ def ocr_pdf_batch(
             executor.submit(_ocr_one_pdf_worker, index, str(pdf_path), dpi): index
             for index, pdf_path in enumerate(pdf_paths)
         }
+        completed = 0
         for future in as_completed(futures):
             index, result = future.result()
             indexed_results[index] = result
+            completed += 1
+            if progress_callback:
+                progress_callback(
+                    f"Completed document {completed} of {len(pdf_paths)}: "
+                    f"{result['source_name']}"
+                )
 
     return [indexed_results[index] for index in range(len(pdf_paths))]
 

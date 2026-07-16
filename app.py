@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import json
 import shutil
+import threading
+import time
 import uuid
 from datetime import datetime
 import fitz
@@ -53,6 +55,60 @@ OPTIONAL_METADATA_FIELDS = ("tax_map", "parcel", "tax_id", "section")
 app = Flask("ocr_pipeline_gpu_optimized")
 ocr_engine = None
 ocr_language = None
+
+_SCAN_PROGRESS_LOCK = threading.Lock()
+_SCAN_PROGRESS: dict[str, Any] = {
+    "active": False,
+    "finished": False,
+    "failed": False,
+    "started_at": 0.0,
+    "messages": [],
+}
+
+
+def reset_scan_progress() -> None:
+    with _SCAN_PROGRESS_LOCK:
+        _SCAN_PROGRESS.update({
+            "active": True,
+            "finished": False,
+            "failed": False,
+            "started_at": time.perf_counter(),
+            "messages": [],
+        })
+
+
+def add_scan_progress(message: str) -> None:
+    text = str(message or "").strip()
+    if not text:
+        return
+    with _SCAN_PROGRESS_LOCK:
+        elapsed = max(0.0, time.perf_counter() - float(_SCAN_PROGRESS.get("started_at") or 0.0))
+        _SCAN_PROGRESS.setdefault("messages", []).append({
+            "text": text,
+            "elapsed": round(elapsed, 2),
+        })
+
+
+def finish_scan_progress(*, failed: bool = False, message: str = "") -> None:
+    if message:
+        add_scan_progress(message)
+    with _SCAN_PROGRESS_LOCK:
+        _SCAN_PROGRESS["active"] = False
+        _SCAN_PROGRESS["finished"] = True
+        _SCAN_PROGRESS["failed"] = failed
+
+
+def scan_progress_snapshot() -> dict[str, Any]:
+    with _SCAN_PROGRESS_LOCK:
+        started_at = float(_SCAN_PROGRESS.get("started_at") or 0.0)
+        elapsed = max(0.0, time.perf_counter() - started_at) if started_at else 0.0
+        return {
+            "active": bool(_SCAN_PROGRESS.get("active")),
+            "finished": bool(_SCAN_PROGRESS.get("finished")),
+            "failed": bool(_SCAN_PROGRESS.get("failed")),
+            "elapsed": round(elapsed, 2),
+            "messages": list(_SCAN_PROGRESS.get("messages", [])),
+        }
 
 """---------------------------------------------------------------------------------------"""
 
@@ -268,7 +324,8 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def scan_batch(
-    input_folder: Path, ocr, config: dict[str, Any], settings: dict[str, Any]
+    input_folder: Path, ocr, config: dict[str, Any], settings: dict[str, Any],
+    progress_callback=None,
 ) -> list[dict[str, Any]]:
     """OCR all PDFs as one related packet and share metadata across the packet.
 
@@ -297,7 +354,9 @@ def scan_batch(
         )
         workers = max(1, min(int(workers or 1), len(pdfs)))
     threads_per_worker = int(settings.get("ocr_threads_per_worker") or 4)
-    print("Begin ocring documents")
+    report = progress_callback or (lambda _message: None)
+    report(f"Found {len(pdfs)} PDF{'s' if len(pdfs) != 1 else ''} to scan.")
+    report("Beginning OCR processing.")
     scanned = ocr_pdf_batch(
         pdfs,
         dpi=settings["dpi"],
@@ -307,18 +366,19 @@ def scan_batch(
         existing_ocr=ocr if workers == 1 else None,
         ocr_device=ocr_device,
         gpu_device_id=gpu_device_id,
+        progress_callback=report,
     )
-    print("Finished ocring documents")
-    print("Begin merging metadata across documents")
+    report("Finished OCR processing.")
+    report("Beginning metadata voting and SDAT enrichment.")
     shared_metadata, metadata_votes = choose_batch_metadata_by_vote(
         scanned_documents=scanned,
         config=config,
         default_project_code=settings["project_code"],
         default_document_type=settings["document_type"],
     )
-    print("Finished merging metadata across documents")
+    report("Finished metadata voting and SDAT enrichment.")
     documents: list[dict[str, Any]] = []
-    print("Begin normalizing documents")
+    report("Preparing documents for review.")
     for scanned_document, metadata_vote in zip(scanned, metadata_votes):
         is_lookup = metadata_vote.document_type == LOOKUP_DOCUMENT_TYPE
         final_metadata = (
@@ -347,7 +407,7 @@ def scan_batch(
                 }
             )
         )
-    print("Finished normalizing documents")
+    report("Finished preparing documents for review.")
     normal_documents = [
         document for document in documents if not document.get("is_lookup_document")
     ]
@@ -772,6 +832,8 @@ def file_document_to_output(
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
+    if request.path == "/api/scan":
+        finish_scan_progress(failed=True, message=f"Scan failed: {error}")
     if request.path.startswith("/api/"):
         app.logger.exception("API request failed")
         return api_error(str(error) or "Unexpected server error")
@@ -847,18 +909,30 @@ def api_update_output_folder():
     return jsonify({"output_folder": str(output_folder), "settings": state.get("settings", {})})
 
 
+@app.get("/api/scan-progress")
+def api_scan_progress():
+    return jsonify(scan_progress_snapshot())
+
+
 @app.post("/api/scan")
 def api_scan():
-    """The api_scan() function """
+    """Scan the selected batch while publishing progress to the browser."""
+    reset_scan_progress()
+    add_scan_progress("Starting scan request.")
     settings = scan_settings(json_payload())
     input_folder = Path(settings["input_folder"])
     output_folder = Path(settings["output_folder"])
 
     if not settings["input_folder"]:
+        finish_scan_progress(failed=True, message="Scan failed: Input folder is required.")
         return api_error("Input folder is required.", 400)
     if not settings["output_folder"]:
+        finish_scan_progress(failed=True, message="Scan failed: Output folder is required.")
         return api_error("Output folder is required.", 400)
     if not input_folder.is_dir():
+        finish_scan_progress(
+            failed=True, message=f"Scan failed: Input folder not found: {input_folder}"
+        )
         return api_error(f"Input folder not found: {input_folder}", 400)
 
     output_folder.mkdir(parents=True, exist_ok=True)
@@ -897,13 +971,16 @@ def api_scan():
 
     state = {
         "settings": settings,
-        "documents": scan_batch(input_folder, ocr, config, settings),
+        "documents": scan_batch(
+            input_folder, ocr, config, settings, progress_callback=add_scan_progress
+        ),
     }
     if settings.get("section"):
         for document in state["documents"]:
             document["metadata"]["section"] = settings["section"]
 
     write_state(state)
+    finish_scan_progress(message=f"Scan complete. {len(state['documents'])} document(s) ready for review.")
     return jsonify(state)
 
 
