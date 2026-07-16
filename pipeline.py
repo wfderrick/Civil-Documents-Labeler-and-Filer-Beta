@@ -25,7 +25,6 @@ from paddleocr import PaddleOCR  # pyright: ignore[reportMissingImports]
 
 from visual_classifier import FIELD_NOTES_LABEL, classify_pdf_visual
 
-DEFAULT_TITLE_BLOCK_CROP = (0.55, 0.65, 1.0, 1.0)
 DOCUMENT_TYPE_THRESHOLD = 0.75
 LOOKUP_DOCUMENT_TYPE = "Lookup Only"
 SDAT_LOOKUP_ANCHORS = (
@@ -322,8 +321,6 @@ def normalize_for_fuzzy(value: str) -> str:
     return str(value or "").lower().translate(OCR_CONFUSION_MAP)
 
 
-def fuzzy_ratio(left: str, right: str) -> float:
-    return SequenceMatcher(None, left, right).ratio()
 
 
 def keyword_groups(raw_keywords: Any) -> dict[str, list[str]]:
@@ -540,40 +537,6 @@ def first_valid_address(
     return None
 
 
-def render_pdf_pages(pdf_path: Path, image_dir: Path, dpi: int) -> list[Path]:
-    image_paths: list[Path] = []
-    matrix = fitz.Matrix(dpi / 72, dpi / 72)
-    with fitz.open(pdf_path) as document:
-        for page_index, page in enumerate(
-            document # type: ignore
-        ):  # pyright: ignore[reportArgumentType]
-            image_path = image_dir / f"page-{page_index + 1:04d}.png"
-            page.get_pixmap(matrix=matrix, alpha=False).save(image_path)
-            image_paths.append(image_path)
-    return image_paths
-
-
-def render_pdf_page_crop(
-    pdf_path: Path,
-    image_dir: Path,
-    dpi: int,
-    page_index: int = 0,
-    crop_box: tuple[float, float, float, float] = DEFAULT_TITLE_BLOCK_CROP,
-) -> Path:
-    """The render_pdf_page_crop() function """
-    matrix = fitz.Matrix(dpi / 72, dpi / 72)
-    with fitz.open(pdf_path) as document:
-        page = document[page_index]
-        rect = page.rect
-        clip = fitz.Rect(
-            rect.width * crop_box[0],
-            rect.height * crop_box[1],
-            rect.width * crop_box[2],
-            rect.height * crop_box[3],
-        )
-        image_path = image_dir / "title-block-crop.png"
-        page.get_pixmap(matrix=matrix, alpha=False, clip=clip).save(image_path)
-        return image_path
 
 
 def _as_float_pair(value: Any) -> list[float] | None:
@@ -587,11 +550,12 @@ def _as_float_pair(value: Any) -> list[float] | None:
 
 
 def _points_from_any(value: Any) -> list[list[float]]:
-    """Extract polygon points from PaddleOCR box/polygon formats."""
+    """The _points_from_any() function returns points for a polygon based on the
+    value parameter. Converts bounding boxes and polygons in polygon point 
+    format."""
     if value is None:
         return []
 
-    # Rect format: [x0, y0, x1, y1]
     if (
         isinstance(value, (list, tuple))
         and len(value) == 4
@@ -612,6 +576,9 @@ def _points_from_any(value: Any) -> list[list[float]]:
 
 
 def _bbox_from_points(points: list[list[float]]) -> list[float]:
+    """The _bbox_from_points() function returns the bounding box representation
+    of the points parameter entered. It returns the leftmost x, the lowest y, 
+    the rightmost x, and the highest y as a list."""
     if not points:
         return [0.0, 0.0, 0.0, 0.0]
     xs = [p[0] for p in points]
@@ -636,7 +603,7 @@ def first_nonempty_value(*values):
 
 def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
     """The extract_ocr_items() function returns a list of dictionaries 
-    containing words, the cofidence associated with them, and bounding boxes to
+    containing words, the confidence associated with them, and bounding boxes to
     show their location on the page.
     """
     items: list[dict[str, Any]] = []
@@ -662,10 +629,6 @@ def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
                     if hasattr(box, "tolist"):
                         box = box.tolist()
 
-                    # PaddleOCR 3.x usually returns a four-point polygon, while
-                    # some models return a flat [x0, y0, x1, y1] rectangle.
-                    # Preserve the polygon and always expose a flat bbox so the
-                    # searchable-PDF writer has one consistent geometry format.
                     points = _points_from_any(box)
                     if points:
                         item["polygon"] = points
@@ -694,7 +657,7 @@ def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
     return items
 
 
-MAX_OCR_IMAGE_SIDE = 3990
+MAX_OCR_IMAGE_SIDE = 3999
 
 
 def _page_ocr_matrix(
@@ -756,7 +719,14 @@ def ocr_pdf_with_layout(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> dict[str, A
     image form of the pdfs. Then the pdfs are rendered by the 
     render_pdf_pages_with_info() function and placed into the directory and the 
     function returns data on all of the images. Then each page is ocred with 
-    the predict() function and timed to send an update to the user."""
+    the predict() function and timed to send an update to the user. 
+    The extract_ocr_items() function takes the result of the predict() function
+    and converts it to a list of tokens with each token having the characters 
+    contained, the ocr's confidence in the classification, and the location. 
+    lines has each text item added to it. The info taken from the 
+    render_pdf_with_info() function and items from the extract_ocr_items() are
+    put into the ocr_pages list. Finally all of it is returned with the lines
+    list of text being combined into a single string and the ocr_pages list."""
     lines: list[str] = []
     ocr_pages: list[dict[str, Any]] = []
 
@@ -783,13 +753,6 @@ def ocr_pdf_with_layout(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> dict[str, A
             )
 
     return {"text": "\n".join(lines), "pages": ocr_pages}
-
-
-def ocr_pdf(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> str:
-    return ocr_pdf_with_layout(pdf_path, ocr, dpi)["text"]
-
-
-
 
 
 _WORKER_OCR: PaddleOCR | None = None
@@ -931,10 +894,8 @@ def ocr_pdf_batch(
     ocr_device: str = "auto",
     gpu_device_id: int = 0,
 ) -> list[dict[str, Any]]:
-    """OCR a batch of PDFs, optionally in parallel.
-
-    Use process-level parallelism because PaddleOCR engines should not be shared
-    across processes. Results are returned in the same order as pdf_paths.
+    """The ocr_pdf_batch() function ocrs all of the pdfs in the pdf_paths 
+    parameter and returns a list of dictionaries holding the path 
     """
     if not pdf_paths:
         return []

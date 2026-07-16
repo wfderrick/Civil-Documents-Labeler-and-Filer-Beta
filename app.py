@@ -401,8 +401,12 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     if "." not in name:
         return name, ""
     project_code, section = name.split(".", 1)
-    section, extra = section.split("-", 1)
-    return project_code.strip(), section.strip()
+    try:
+        section, extra = section.split("-", 1)
+        return project_code.strip(), section.strip()
+
+    finally:
+        return project_code.strip(), section.strip()
 
 
 def refresh_batch_property_fields_from_sdat(
