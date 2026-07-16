@@ -75,7 +75,7 @@ function startScanProgressPolling() {
   resetScanProgressPanel();
   clearInterval(scanProgressTimer);
   pollScanProgress();
-  scanProgressTimer = setInterval(pollScanProgress, 250);
+  scanProgressTimer = setInterval(pollScanProgress, 300);
 }
 
 async function stopScanProgressPolling({ failed = false } = {}) {

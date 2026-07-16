@@ -67,6 +67,9 @@ _SCAN_PROGRESS: dict[str, Any] = {
 
 
 def reset_scan_progress() -> None:
+    """The reset_scan_progress() function clears previous information from the 
+    _SCAN_PROGRESS dictionary to start fresh when a new batch of documents is 
+    being scanned."""
     with _SCAN_PROGRESS_LOCK:
         _SCAN_PROGRESS.update({
             "active": True,
@@ -78,6 +81,8 @@ def reset_scan_progress() -> None:
 
 
 def add_scan_progress(message: str) -> None:
+    """The add_scan_progress() function takes in the message parameter and adds
+    it to the messages key in the _SCAN_PROGRESS dictionary."""
     text = str(message or "").strip()
     if not text:
         return
