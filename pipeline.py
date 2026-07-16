@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import argparse
+import time
+from contextlib import contextmanager
 import json
 import re
-import shutil
 import sys
 import tempfile
 from collections import Counter
@@ -163,6 +163,12 @@ OCR_NUMBER_MAP = str.maketrans(
     }
 )
 
+@contextmanager
+def time_block(name):
+    start = time.perf_counter()
+    yield
+    end = time.perf_counter()
+    print(f"[{name}] Took {end - start:.6f} seconds")
 
 def normalize_ocr_numbers(text: str) -> str:
     """Normalize OCR mistakes that commonly appear inside numeric identifiers."""
@@ -629,9 +635,9 @@ def first_nonempty_value(*values):
 
 
 def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
-    """Return PaddleOCR text, confidence, and bounding boxes in image pixels.
-
-    Supports both PaddleOCR 3.x dictionary results and older list-style results.
+    """The extract_ocr_items() function returns a list of dictionaries 
+    containing words, the cofidence associated with them, and bounding boxes to
+    show their location on the page.
     """
     items: list[dict[str, Any]] = []
 
@@ -655,7 +661,15 @@ def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
                     box = boxes[i]
                     if hasattr(box, "tolist"):
                         box = box.tolist()
-                    item["bbox"] = box
+
+                    # PaddleOCR 3.x usually returns a four-point polygon, while
+                    # some models return a flat [x0, y0, x1, y1] rectangle.
+                    # Preserve the polygon and always expose a flat bbox so the
+                    # searchable-PDF writer has one consistent geometry format.
+                    points = _points_from_any(box)
+                    if points:
+                        item["polygon"] = points
+                        item["bbox"] = _bbox_from_points(points)
 
                 items.append(item)
 
@@ -680,15 +694,23 @@ def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
     return items
 
 
-def extract_line_text(ocr_result: Any) -> list[str]:
-    return [item["text"] for item in extract_ocr_items(ocr_result) if item.get("text")]
+MAX_OCR_IMAGE_SIDE = 3990
 
 
-def ocr_images(image_paths: Iterable[Path], ocr: PaddleOCR) -> str:
-    lines: list[str] = []
-    for image_path in image_paths:
-        lines.extend(extract_line_text(ocr.predict(str(image_path))))
-    return "\n".join(lines)
+def _page_ocr_matrix(
+    page: fitz.Page, requested_dpi: int, max_side: int = MAX_OCR_IMAGE_SIDE
+) -> tuple[fitz.Matrix, float]:
+    """Return the fastest render matrix that does not trigger Paddle resizing."""
+    requested_scale = max(float(requested_dpi), 72.0) / 72.0
+    projected_max = max(
+        float(page.rect.width) * requested_scale,
+        float(page.rect.height) * requested_scale,
+    )
+    if projected_max > max_side:
+        scale = requested_scale * (max_side / projected_max)
+    else:
+        scale = requested_scale
+    return fitz.Matrix(scale, scale), scale * 72.0
 
 
 def render_pdf_pages_with_info(
@@ -697,14 +719,19 @@ def render_pdf_pages_with_info(
     """The render_pdf_page_with_info() function converts the pdf at the location
     specified in the pdf_path parameter into images and places them at the
     location specified in the image_dir parameter with the image resolution 
-    controlled with the dpi parameter. """
+    controlled with the dpi parameter. The function the returns a list of 
+    dictionaries with information on each page contained in the pdf. This data 
+    includes index, path, pdf width, pdf height, image width, image height, and
+    dpi. This allows for conversions between location of text on the rendered 
+    image vs location of text on the pdf."""
     pages: list[dict[str, Any]] = []
-    matrix = fitz.Matrix(dpi / 72, dpi / 72)
+    image_dir.mkdir(parents=True, exist_ok=True)
     with fitz.open(pdf_path) as document:
         for page_index, page in enumerate(
             document):  # pyright: ignore[reportArgumentType]
+            matrix, effective_dpi = _page_ocr_matrix(page, dpi)
             image_path = image_dir / f"page-{page_index + 1:04d}.png"
-            pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+            pixmap = page.get_pixmap(matrix=matrix, alpha=False, annots=False)
             pixmap.save(image_path)
             pages.append(
                 {
@@ -714,22 +741,33 @@ def render_pdf_pages_with_info(
                     "image_height": pixmap.height,
                     "page_width": float(page.rect.width),
                     "page_height": float(page.rect.height),
-                    "dpi": dpi,
+                    "dpi": effective_dpi,
+                    "page_rotation": int(page.rotation),
                 }
             )
     return pages
 
 
 def ocr_pdf_with_layout(pdf_path: Path, ocr: PaddleOCR, dpi: int) -> dict[str, Any]:
-    """OCR a PDF and preserve page-level bounding boxes for searchable text 
-    layers. """
+    """The ocr_pdf_with_layout() function returns a dictionary with text from 
+    the pdf located at the pdf_path parameter by the ocr pointed to by the ocr 
+    parameter after being converted to images with resolution determined by the 
+    dpi parameter. First a temporary directory is created to house the rendered 
+    image form of the pdfs. Then the pdfs are rendered by the 
+    render_pdf_pages_with_info() function and placed into the directory and the 
+    function returns data on all of the images. Then each page is ocred with 
+    the predict() function and timed to send an update to the user."""
     lines: list[str] = []
     ocr_pages: list[dict[str, Any]] = []
 
     with tempfile.TemporaryDirectory(prefix="paddleocr_pdf_") as temp_dir:
         rendered_pages = render_pdf_pages_with_info(pdf_path, Path(temp_dir), dpi)
+        total = len(rendered_pages)
+        num = 1
         for page_info in rendered_pages:
-            result = ocr.predict(str(page_info["image_path"]))
+            with time_block(f"Ocred page {num} of {total}"):
+                result = ocr.predict(str(page_info["image_path"]))
+            num += 1
             items = extract_ocr_items(result)
             lines.extend(item["text"] for item in items if item.get("text"))
             ocr_pages.append(
@@ -802,7 +840,20 @@ def make_ocr(
     PaddleOCR constructor to ensure a constructor is returned.
     """
     resolved_device = resolve_ocr_device(ocr_device, gpu_device_id)
-    base_kwargs: dict[str, Any] = {"lang": lang}
+
+    # Keep PaddleOCR geometry in the same orientation and coordinate system as
+    # the rendered PDF page. The document orientation / unwarping pipelines
+    # transform the image before detection, which makes their returned boxes
+    # unsuitable for writing directly back onto the original PDF. Disabling
+    # them also avoids loading three unnecessary preprocessing models.
+    base_kwargs: dict[str, Any] = {
+        "lang": lang,
+        "use_doc_orientation_classify": False,
+        "use_doc_unwarping": False,
+        "use_textline_orientation": False,
+        "text_det_limit_side_len": 4000,
+        "text_det_limit_type": "max",
+    }
 
     if  resolved_device == "cpu" and cpu_threads:
         base_kwargs["cpu_threads"] = int(cpu_threads)
@@ -903,7 +954,11 @@ def ocr_pdf_batch(
             gpu_device_id=gpu_device_id,
         )
         results: list[dict[str, Any]] = []
+        total = len(pdf_paths)
+        num = 1
         for pdf_path in pdf_paths:
+            print(f"PDF {num} of {total}.")
+            num += 1
             full_ocr = ocr_pdf_with_layout(pdf_path, ocr, dpi)
             full_text = full_ocr["text"]
             results.append(

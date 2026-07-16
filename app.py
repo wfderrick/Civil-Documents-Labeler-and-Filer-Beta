@@ -538,26 +538,64 @@ def metadata_keyword_text(document: dict[str, Any]) -> str:
     return "; ".join(f"{key}={value}" for key, value in custom_text.items() if value)
 
 
-def add_paddle_searchable_text_layer(pdf_path: Path, document: dict[str, Any]) -> None:
-    """Add an invisible searchable text layer using PaddleOCR bounding boxes.
+def _ocr_item_pdf_rect(
+    item: dict[str, Any],
+    x_scale: float,
+    y_scale: float,
+) -> fitz.Rect | None:
+    """Convert one OCR item's pixel geometry to a PDF-point rectangle."""
+    raw = item.get("bbox") or item.get("polygon")
+    if raw is None:
+        return None
+    if hasattr(raw, "tolist"):
+        raw = raw.tolist()
 
-    The OCR boxes are stored in image-pixel coordinates. This maps them back to
-    PDF page points using the image/page dimensions captured during OCR.
+    try:
+        # Preferred normalized bbox format: [x0, y0, x1, y1].
+        if len(raw) == 4 and all(isinstance(value, (int, float)) for value in raw):
+            x0, y0, x1, y1 = [float(value) for value in raw]
+        else:
+            # Compatibility with four-point PaddleOCR polygons.
+            points = [point for point in raw if isinstance(point, (list, tuple)) and len(point) >= 2]
+            if not points:
+                return None
+            xs = [float(point[0]) for point in points]
+            ys = [float(point[1]) for point in points]
+            x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
+    except (TypeError, ValueError):
+        return None
+
+    rect = fitz.Rect(x0 * x_scale, y0 * y_scale, x1 * x_scale, y1 * y_scale)
+    if rect.is_empty or rect.width <= 0 or rect.height <= 0:
+        return None
+    return rect
+
+
+def add_paddle_searchable_text_layer(pdf_path: Path, document: dict[str, Any]) -> None:
+    """Add selectable, invisible text using the stored PaddleOCR geometry.
+
+    PaddleOCR coordinates are measured in rendered-image pixels. They are
+    mapped back to PDF points using the image dimensions saved during OCR.
+    The text uses PDF render mode 3, so it remains invisible while still being
+    searchable and selectable in browsers and PDF readers.
     """
     ocr_pages = document.get("ocr_pages") or []
     if not ocr_pages:
         return
+
+    font = fitz.Font("helv")
+    inserted = 0
 
     with fitz.open(pdf_path) as pdf:
         for page_data in ocr_pages:
             try:
                 page_index = int(page_data.get("page_index", 0))
                 page = pdf[page_index]
-            except Exception:
+                image_width = float(page_data.get("image_width") or 0)
+                image_height = float(page_data.get("image_height") or 0)
+            except (IndexError, TypeError, ValueError):
                 continue
 
-            image_width = float(page_data.get("image_width") or 0)
-            image_height = float(page_data.get("image_height") or 0)
             if image_width <= 0 or image_height <= 0:
                 continue
 
@@ -566,44 +604,40 @@ def add_paddle_searchable_text_layer(pdf_path: Path, document: dict[str, Any]) -
 
             for item in page_data.get("items", []):
                 text = str(item.get("text", "")).strip()
-                bbox = item.get("bbox") or []
-                if not text or len(bbox) != 4:
+                if not text:
                     continue
+
+                rect = _ocr_item_pdf_rect(item, x_scale, y_scale)
+                if rect is None:
+                    continue
+
+                # Fit invisible text to the OCR rectangle.  The baseline is
+                # derived from Helvetica's ascender / descender rather than
+                # being placed at the bottom of the box, which keeps selection
+                # geometry aligned with the detected line.
+                natural_width = max(font.text_length(text, fontsize=1), 0.01)
+                height_size = rect.height / max(font.ascender - font.descender, 0.01)
+                width_size = (rect.width * 0.98) / natural_width
+                font_size = min(max(min(height_size, width_size), 1.0), 72.0)
+                baseline_y = rect.y0 + (font.ascender * font_size)
+                baseline = fitz.Point(rect.x0, baseline_y)
 
                 try:
-                    x0, y0, x1, y1 = [float(value) for value in bbox]
-                except Exception:
-                    continue
-
-                rect = fitz.Rect(x0 * x_scale, y0 * y_scale, x1 * x_scale, y1 * y_scale)
-                if rect.is_empty or rect.width <= 0 or rect.height <= 0:
-                    continue
-
-                # Keep text invisible but searchable. render_mode=3 is invisible text.
-                font_size = max(1.0, min(rect.height * 0.85, 14.0))
-                try:
-                    result = page.insert_textbox(
-                        rect,
+                    page.insert_text(
+                        baseline,
                         text,
                         fontsize=font_size,
                         fontname="helv",
                         render_mode=3,
                         overlay=True,
                     )
-                    if result < 0:
-                        # Fallback for very tight OCR boxes.
-                        page.insert_text(
-                            (rect.x0, rect.y1),
-                            text,
-                            fontsize=font_size,
-                            fontname="helv",
-                            render_mode=3,
-                            overlay=True,
-                        )
+                    inserted += 1
                 except Exception:
                     continue
 
-        pdf.saveIncr()
+        if inserted:
+            # Incremental save is fast and preserves the scanned page content.
+            pdf.saveIncr()
 
 
 def write_standard_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
