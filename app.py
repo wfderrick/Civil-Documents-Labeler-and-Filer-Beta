@@ -17,7 +17,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file
 
 from pipeline import (
     ExtractedMetadata,
@@ -27,7 +27,6 @@ from pipeline import (
     enrich_metadata_with_sdat,
     lookup_maryland_property_by_address,
     metadata_from_sdat_record,
-    extract_project_code_from_output_folder,
     load_config,
     merge_batch_metadata,
     make_ocr,
@@ -61,6 +60,8 @@ ocr_language = None
 
 
 def api_error(message: str, status_code: int = 500):
+    """The api_error() function returns a Response object and integer holding 
+    an error message as a json and status code. """
     return jsonify({"error": message}), status_code
 
 
@@ -214,25 +215,37 @@ def find_document(state: dict[str, Any], document_id: str) -> dict[str, Any] | N
     )
 
 
-""""""
-
-
 def json_payload() -> dict[str, Any]:
+    """The json_payload() function returns the fields given in the body of the 
+     POST or PATCH request from the browser these include scan settings and 
+     document metadata. This is done using the build in get_json() function for
+     the request object imported from Flask.
+     """
     return request.get_json(force=True) or {}
 
 
 def resolve_folder(value: str) -> Path:
+    """The resolve_folder() function returns a fully expanded and resolved 
+    path ~. If the tilde is used expanduser() replaces with the users home 
+    directory. resolve() then removes any relative paths such as 
+    documents/.../project1 to ensure an absolute path."""
     return Path(value).expanduser().resolve()
 
 
-"""Using the data pulled using the get_json function from the request object from"""
-
-
 def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
+    """The scan_settings() function returns a dictionary with the current scan
+    settings set by the payload parameter. 
+
+    input folder, output folder, config path, project code, project code, dpi, 
+    and ocr device are all pulled from the parameter the get() function. The 
+    other settings document type, language, gpu device id, parrallel ocr, ocr 
+    workers, and threads per worker are all kept as defaults which can be 
+    changed by the user manually in this function if necessary. Both input and 
+    output folders are put through the  resolve_folder() function to make sure 
+    it is a valid path."""
     input_folder_raw = (payload.get("input_folder") or "").strip()
     output_folder_raw = (payload.get("output_folder") or "").strip()
 
-    # Keep advanced/default settings in code/config instead of exposing them in the UI.
     return {
         "input_folder": (
             str(resolve_folder(input_folder_raw)) if input_folder_raw else ""
@@ -381,6 +394,9 @@ def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
 
 
 def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
+    """The _folder_project_and_section() function returns the project code and 
+    section taken from the output_folder parameter. It splits the parameter on
+    the . and the - to determine the project code and section and returns both."""
     name = output_folder.name.strip()
     if "." not in name:
         return name, ""
@@ -749,7 +765,8 @@ def api_state():
     and documents from the documents.json file in the .review_state folder in
     project directory. Each document is then checked and corrected version based
     on the metadata contained in the documents.json file. jsonify() is then
-    called on the """
+    called on the state variable which returns a Response object containing the 
+    json pulled from documents.json."""
     state = read_state()
     state["documents"] = [
         normalize_document(document) for document in state.get("documents", [])
@@ -794,6 +811,7 @@ def api_update_output_folder():
 
 @app.post("/api/scan")
 def api_scan():
+    """The api_scan() function """
     settings = scan_settings(json_payload())
     input_folder = Path(settings["input_folder"])
     output_folder = Path(settings["output_folder"])
@@ -820,11 +838,8 @@ def api_scan():
         settings["project_code_override"] = settings["project_code"]
     else:
         settings["project_code"] = safe_path_part(
-            detected_project_code
-            or extract_project_code_from_output_folder(
-                output_folder, config, "Project"
-            ),
-            "Project",
+            detected_project_code,
+            "Project"
         )
         settings["project_code_override"] = ""
     use_single_engine = (

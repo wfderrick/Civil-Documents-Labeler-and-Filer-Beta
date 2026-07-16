@@ -129,6 +129,13 @@ function replaceDocument(updatedDocument) {
   if (index >= 0) state.documents[index] = updatedDocument;
 }
 
+/**The setButtonLoading() function controls the appearance and function of the
+ * Scan PDF's and File Batch buttons. When the second parameter is set to True 
+ * it prevents the user from clicking the button. Also based on the second 
+ * parameter the button either displays the loading text meaning the process 
+ * initiated by the button is currently happening or the ready text meaning the 
+ * process has either not been started or it's finished. 
+*/
 function setButtonLoading(button, isLoading, loadingText, readyText) {
   button.disabled = isLoading;
   button.textContent = isLoading ? loadingText : readyText;
@@ -343,6 +350,11 @@ async function saveOutputFolder() {
   return data.output_folder;
 }
 
+/**The scanPayload() function returns a javascript object containing the 
+ * settings relevant to the scanning process which are input folder, 
+ * ouput folder, config path, project code, dpi, and ocr device. These are taken
+ * from the current html fields for each.
+*/
 function scanPayload() {
   return {
     input_folder: fields.inputFolder.value,
@@ -372,11 +384,21 @@ function updatePayload(autoFolder = false, autoFileName = false, changedField = 
   };
 }
 
-/**The loadState() function updates the fields in */
+/**The loadState() function updates the current appearance and state of the app.
+ * First it calls requestJson() with the /api/state url which tells the browser 
+ * to make a GET request to Flask. The matching decorator in app.py calls the 
+ * api_state() function to return a Response object containing json with the 
+ * information about the current state from the documents.json file. Once 
+ * requestJson gives its output it is passed into applyState() which takes the 
+ * json as its data parameter and updates all of the current html fields and the
+ * state in app.js along with adding the visual changes of the document buttons,
+ * warning banner, document pdf, and review panel.
+*/
 async function loadState() {
   applyState(await requestJson('/api/state'));
 }
 
+/**The scan() function */
 async function scan() {
   const button = $('scanButton');
   setButtonLoading(button, true, 'Scanning...', 'Scan PDFs');
@@ -483,7 +505,6 @@ function registerAutoSave(ids, autoFolder, autoFileName) {
 registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'section', 'editProjectCode', 'editDocumentType'], true, true);
 registerAutoSave(['folderName', 'fileName'], false, false);
 
-
 fields.outputFolder.addEventListener('change', () => {
   if (!state.documents.length) return;
   saveOutputFolder()
@@ -491,11 +512,18 @@ fields.outputFolder.addEventListener('change', () => {
     .catch((error) => showToast(error.message, true));
 });
 
+/*Calls the scan() function whenever the Scan PDF's button is clicked.*/
 $('scanButton').addEventListener('click', scan);
+
+/*Calls the fileCurrent() function whenever the File PDF button is clicked.*/
 $('fileButton').addEventListener('click', fileCurrent);
+
+/*Calls the fileAll() function whenever the File Batch button is clicked.*/
 $('fileAllButton').addEventListener('click', fileAll);
 
-/**This is the final connection between python, html, and javascript.
+
+/*This is called the first time the app is opened by the user to update the 
+visuals and settings. 
 */
 loadState().catch((error) => showToast(error.message, true));
 
