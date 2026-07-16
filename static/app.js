@@ -51,9 +51,16 @@ async function loadBrowseFolder(path) {
     $('browseFolderList').appendChild(button);
   });
 
-  $('useFolderButton').onclick = () => {
+  $('useFolderButton').onclick = async () => {
     fields[browseTargetField].value = data.current;
     $('folderBrowserModal').classList.add('hidden');
+    if (browseTargetField === 'outputFolder' && state.documents.length) {
+      try {
+        await saveOutputFolder();
+      } catch (error) {
+        showToast(error.message, true);
+      }
+    }
   };
 }
 
@@ -326,6 +333,16 @@ function applyState(data) {
     renderList();
 }
 
+async function saveOutputFolder() {
+  const data = await requestJson('/api/settings/output-folder', {
+    method: 'PATCH',
+    body: JSON.stringify({ output_folder: fields.outputFolder.value }),
+  });
+  state.settings.output_folder = data.output_folder;
+  fields.outputFolder.value = data.output_folder;
+  return data.output_folder;
+}
+
 function scanPayload() {
   return {
     input_folder: fields.inputFolder.value,
@@ -408,6 +425,7 @@ async function fileCurrent() {
       body: JSON.stringify({
         folder_name: fields.folderName.value,
         file_name: fields.fileName.value,
+        output_folder: fields.outputFolder.value,
         copy: fields.copyFile.checked,
         save_text: fields.saveText.checked,
       }),
@@ -429,6 +447,7 @@ async function fileAll() {
     const data = await requestJson('/api/file-all', {
       method: 'POST',
       body: JSON.stringify({
+        output_folder: fields.outputFolder.value,
         copy: fields.copyFile.checked,
         save_text: fields.saveText.checked,
       }),
@@ -463,6 +482,14 @@ function registerAutoSave(ids, autoFolder, autoFileName) {
 
 registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'section', 'editProjectCode', 'editDocumentType'], true, true);
 registerAutoSave(['folderName', 'fileName'], false, false);
+
+
+fields.outputFolder.addEventListener('change', () => {
+  if (!state.documents.length) return;
+  saveOutputFolder()
+    .then(() => showToast('Output folder updated for the current batch.'))
+    .catch((error) => showToast(error.message, true));
+});
 
 $('scanButton').addEventListener('click', scan);
 $('fileButton').addEventListener('click', fileCurrent);

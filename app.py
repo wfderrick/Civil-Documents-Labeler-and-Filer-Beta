@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import shutil
 import uuid
@@ -43,6 +44,8 @@ except Exception:  # pragma: no cover - shown in the UI at runtime
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / ".review_state" / "documents.json"
+TRACKER_DIR = Path(r"C:\ocr tracker")
+TRACKER_FILE = TRACKER_DIR / "filed_batches.csv"
 DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
 DEFAULT_STATE: dict[str, Any] = {"settings": {}, "documents": []}
 REQUIRED_METADATA_FIELDS = ("lot", "address", "project_code", "document_type")
@@ -77,6 +80,51 @@ def write_state(state: dict[str, Any]) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with STATE_FILE.open("w", encoding="utf-8") as state_file:
         json.dump(state, state_file, indent=2)
+
+
+
+
+def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
+    """Validate and persist a new output folder for the current review batch."""
+    value = str(raw_value or "").strip()
+    if not value:
+        raise ValueError("Output folder is required.")
+    output_folder = Path(value).expanduser().resolve()
+    output_folder.mkdir(parents=True, exist_ok=True)
+    state.setdefault("settings", {})["output_folder"] = str(output_folder)
+    return output_folder
+
+
+def append_batch_tracker(
+    documents: list[dict[str, Any]],
+    output_folder: Path,
+    filed_documents: list[dict[str, Any]],
+) -> None:
+    """Append one compact CSV record for a successfully filed batch."""
+    if not documents or not filed_documents:
+        return
+
+    metadata = documents[0].get("metadata", {})
+    destination_folder = Path(filed_documents[0]["filed_path"]).parent
+    row = {
+        "lot_number": metadata.get("lot", ""),
+        "address": metadata.get("address", ""),
+        "location_filed": str(destination_folder),
+        "time_filed": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "project_code": metadata.get("project_code", ""),
+        "section": metadata.get("section", ""),
+        "file_count": len(filed_documents),
+        "files_filed": "|".join(Path(doc["filed_path"]).name for doc in filed_documents),
+    }
+
+    TRACKER_DIR.mkdir(parents=True, exist_ok=True)
+    fieldnames = list(row)
+    needs_header = not TRACKER_FILE.exists() or TRACKER_FILE.stat().st_size == 0
+    with TRACKER_FILE.open("a", newline="", encoding="utf-8") as tracker:
+        writer = csv.DictWriter(tracker, fieldnames=fieldnames)
+        if needs_header:
+            writer.writeheader()
+        writer.writerow(row)
 
 
 def get_ocr(lang: str, ocr_device: str = "auto", gpu_device_id: int = 0):
@@ -337,6 +385,7 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     if "." not in name:
         return name, ""
     project_code, section = name.split(".", 1)
+    section, extra = section.split("-", 1)
     return project_code.strip(), section.strip()
 
 
@@ -730,6 +779,19 @@ def api_browse_folders():
     )
 
 
+@app.patch("/api/settings/output-folder")
+def api_update_output_folder():
+    state = read_state()
+    try:
+        output_folder = update_output_folder_setting(
+            state, (request.get_json(silent=True) or {}).get("output_folder", "")
+        )
+    except (OSError, ValueError) as error:
+        return api_error(str(error), 400)
+    write_state(state)
+    return jsonify({"output_folder": str(output_folder), "settings": state.get("settings", {})})
+
+
 @app.post("/api/scan")
 def api_scan():
     settings = scan_settings(json_payload())
@@ -824,11 +886,12 @@ def api_file_document(document_id: str):
             "Lookup-only SDAT records are removed after the batch is filed.", 400
         )
 
-    output_folder = (
-        Path(state.get("settings", {}).get("output_folder", "")).expanduser().resolve()
-    )
-    if not str(output_folder):
-        return api_error("Output folder is not configured.", 400)
+    try:
+        output_folder = update_output_folder_setting(
+            state, payload.get("output_folder") or state.get("settings", {}).get("output_folder", "")
+        )
+    except (OSError, ValueError) as error:
+        return api_error(str(error), 400)
 
     try:
         filed = file_document_to_output(
@@ -850,9 +913,12 @@ def api_file_document(document_id: str):
 def api_file_all_documents():
     payload = request.get_json(silent=True) or {}
     state = read_state()
-    output_folder = (
-        Path(state.get("settings", {}).get("output_folder", "")).expanduser().resolve()
-    )
+    try:
+        output_folder = update_output_folder_setting(
+            state, payload.get("output_folder") or state.get("settings", {}).get("output_folder", "")
+        )
+    except (OSError, ValueError) as error:
+        return api_error(str(error), 400)
     documents = state.get("documents", [])
     normal_documents = [doc for doc in documents if not doc.get("is_lookup_document")]
     lookup_documents = [doc for doc in documents if doc.get("is_lookup_document")]
@@ -875,6 +941,11 @@ def api_file_all_documents():
             )
     except FileNotFoundError as error:
         return api_error(str(error), 400)
+
+    try:
+        append_batch_tracker(normal_documents, output_folder, filed_documents)
+    except OSError as error:
+        return api_error(f"Documents were filed, but the tracker could not be updated: {error}", 500)
 
     # Delete lookup-only source records only after every permanent document succeeds.
     for lookup in lookup_documents:
