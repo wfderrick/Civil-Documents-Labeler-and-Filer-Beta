@@ -66,6 +66,11 @@ _SCAN_PROGRESS: dict[str, Any] = {
 }
 
 
+"""---------------------------------------------------------------------------------------"""
+
+"""FUNCTION DEFINITION SECTION"""
+
+
 def reset_scan_progress() -> None:
     """The reset_scan_progress() function clears previous information from the 
     _SCAN_PROGRESS dictionary to start fresh when a new batch of documents is 
@@ -95,6 +100,8 @@ def add_scan_progress(message: str) -> None:
 
 
 def finish_scan_progress(*, failed: bool = False, message: str = "") -> None:
+    """The finish_scan_progress() function sets the _SCAN_PROGRESS dictionary to 
+    its finished state after a batch has finished scanning."""
     if message:
         add_scan_progress(message)
     with _SCAN_PROGRESS_LOCK:
@@ -104,6 +111,8 @@ def finish_scan_progress(*, failed: bool = False, message: str = "") -> None:
 
 
 def scan_progress_snapshot() -> dict[str, Any]:
+    """The scan_progress_snapshot() function returns total time, active,
+    finished, and failed scans and messages in the _SCAN_PROGRESS dictionary."""
     with _SCAN_PROGRESS_LOCK:
         started_at = float(_SCAN_PROGRESS.get("started_at") or 0.0)
         elapsed = max(0.0, time.perf_counter() - started_at) if started_at else 0.0
@@ -114,11 +123,7 @@ def scan_progress_snapshot() -> dict[str, Any]:
             "elapsed": round(elapsed, 2),
             "messages": list(_SCAN_PROGRESS.get("messages", [])),
         }
-
-"""---------------------------------------------------------------------------------------"""
-
-"""FUNCTION DEFINITION SECTION"""
-
+    
 
 def api_error(message: str, status_code: int = 500):
     """The api_error() function returns a Response object and integer holding 
@@ -139,15 +144,21 @@ def read_state() -> dict[str, Any]:
 
 
 def write_state(state: dict[str, Any]) -> None:
+    """The write_state() function updates the documents.json file with current 
+    settings and document metadata. It begins by ensuring the parent directory 
+    exists for the STATE_FILE. Then it opens the state file to either be created 
+    if it doesn't exist or overwritten if it does. Finally dump() writes itself
+    onto the file."""
+    print(str(STATE_FILE.parent))
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with STATE_FILE.open("w", encoding="utf-8") as state_file:
         json.dump(state, state_file, indent=2)
 
 
-
-
 def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
-    """Validate and persist a new output folder for the current review batch."""
+    """The update_output_folder_setting() function sets the output folder in the
+    parameter to the new output folder given in the raw_value parameter after 
+    trimming and validating it."""
     value = str(raw_value or "").strip()
     if not value:
         raise ValueError("Output folder is required.")
@@ -162,7 +173,9 @@ def append_batch_tracker(
     output_folder: Path,
     filed_documents: list[dict[str, Any]],
 ) -> None:
-    """Append one compact CSV record for a successfully filed batch."""
+    """The append_batch_tracker() function adds a new row to the ocr tracker 
+    file when a batch of documents is filed with lot number, 
+    address, location filed, time filed, project code, """
     if not documents or not filed_documents:
         return
 
