@@ -39,11 +39,13 @@
   ],
   "document_type_keywords": {
     "House Location": [
+      "house-location",
       "house location",
       "houselocation",
       "house loc",
       "hse location",
-      "location drawing"
+      "location drawing",
+      "as built"
     ],
     "Site Plan": [
       "site plan",
@@ -58,6 +60,7 @@
       "foundation check"
     ],
     "Replat": [
+      "replatting",
       "replat",
       "re plat"
     ],

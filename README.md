@@ -14,11 +14,16 @@ This version is optimized for one related batch of PDFs, such as Site Plan, Hous
 - Manual changes to lot or address on one document update every document in the batch.
 - Filing convention remains: folder `Lot # - Address`, file `Document Type - Lot #.pdf`.
 
-## Run
+## Installation
 
 ```bash
 python -m pip install -r requirements.txt
-python app.py
+```
+
+## Run
+
+```bash
+python -m app run
 ```
 
 Open: http://127.0.0.1:5055
@@ -81,3 +86,4 @@ Property synchronization priority is Tax ID first, then address. Editing Tax ID 
 - Documents whose type cannot be identified default to **Field Notes**.
 - SDAT printouts are labeled **Lookup Only** and remain visible in the review queue.
 - Lookup Only documents are not filed; they are removed after all permanent documents file successfully.
+

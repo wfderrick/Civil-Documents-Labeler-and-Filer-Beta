@@ -72,17 +72,19 @@ _SCAN_PROGRESS: dict[str, Any] = {
 
 
 def reset_scan_progress() -> None:
-    """The reset_scan_progress() function clears previous information from the 
-    _SCAN_PROGRESS dictionary to start fresh when a new batch of documents is 
+    """The reset_scan_progress() function clears previous information from the
+    _SCAN_PROGRESS dictionary to start fresh when a new batch of documents is
     being scanned."""
     with _SCAN_PROGRESS_LOCK:
-        _SCAN_PROGRESS.update({
-            "active": True,
-            "finished": False,
-            "failed": False,
-            "started_at": time.perf_counter(),
-            "messages": [],
-        })
+        _SCAN_PROGRESS.update(
+            {
+                "active": True,
+                "finished": False,
+                "failed": False,
+                "started_at": time.perf_counter(),
+                "messages": [],
+            }
+        )
 
 
 def add_scan_progress(message: str) -> None:
@@ -92,15 +94,19 @@ def add_scan_progress(message: str) -> None:
     if not text:
         return
     with _SCAN_PROGRESS_LOCK:
-        elapsed = max(0.0, time.perf_counter() - float(_SCAN_PROGRESS.get("started_at") or 0.0))
-        _SCAN_PROGRESS.setdefault("messages", []).append({
-            "text": text,
-            "elapsed": round(elapsed, 2),
-        })
+        elapsed = max(
+            0.0, time.perf_counter() - float(_SCAN_PROGRESS.get("started_at") or 0.0)
+        )
+        _SCAN_PROGRESS.setdefault("messages", []).append(
+            {
+                "text": text,
+                "elapsed": round(elapsed, 2),
+            }
+        )
 
 
 def finish_scan_progress(*, failed: bool = False, message: str = "") -> None:
-    """The finish_scan_progress() function sets the _SCAN_PROGRESS dictionary to 
+    """The finish_scan_progress() function sets the _SCAN_PROGRESS dictionary to
     its finished state after a batch has finished scanning."""
     if message:
         add_scan_progress(message)
@@ -123,11 +129,11 @@ def scan_progress_snapshot() -> dict[str, Any]:
             "elapsed": round(elapsed, 2),
             "messages": list(_SCAN_PROGRESS.get("messages", [])),
         }
-    
+
 
 def api_error(message: str, status_code: int = 500):
-    """The api_error() function returns a Response object and integer holding 
-    an error message as a json and status code. """
+    """The api_error() function returns a Response object and integer holding
+    an error message as a json and status code."""
     return jsonify({"error": message}), status_code
 
 
@@ -144,9 +150,9 @@ def read_state() -> dict[str, Any]:
 
 
 def write_state(state: dict[str, Any]) -> None:
-    """The write_state() function updates the documents.json file with current 
-    settings and document metadata. It begins by ensuring the parent directory 
-    exists for the STATE_FILE. Then it opens the state file to either be created 
+    """The write_state() function updates the documents.json file with current
+    settings and document metadata. It begins by ensuring the parent directory
+    exists for the STATE_FILE. Then it opens the state file to either be created
     if it doesn't exist or overwritten if it does. Finally dump() writes itself
     onto the file."""
     print(str(STATE_FILE.parent))
@@ -157,7 +163,7 @@ def write_state(state: dict[str, Any]) -> None:
 
 def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
     """The update_output_folder_setting() function sets the output folder in the
-    parameter to the new output folder given in the raw_value parameter after 
+    parameter to the new output folder given in the raw_value parameter after
     trimming and validating it."""
     value = str(raw_value or "").strip()
     if not value:
@@ -173,9 +179,13 @@ def append_batch_tracker(
     output_folder: Path,
     filed_documents: list[dict[str, Any]],
 ) -> None:
-    """The append_batch_tracker() function adds a new row to the ocr tracker 
-    file when a batch of documents is filed with lot number, 
-    address, location filed, time filed, project code, """
+    """The append_batch_tracker() function adds a new row to the ocr tracker
+    file when a batch of documents is filed with lot number,
+    address, location filed, time filed, project code, section, file count, and
+    files filed. It consolidates that information into a python dictionary and
+    uses the DictWriter() function to write a new line to the csv file. If the t
+    tracker hasn't been created yet a header is added at the start of the file
+    when it is created."""
     if not documents or not filed_documents:
         return
 
@@ -189,7 +199,9 @@ def append_batch_tracker(
         "project_code": metadata.get("project_code", ""),
         "section": metadata.get("section", ""),
         "file_count": len(filed_documents),
-        "files_filed": "|".join(Path(doc["filed_path"]).name for doc in filed_documents),
+        "files_filed": "|".join(
+            Path(doc["filed_path"]).name for doc in filed_documents
+        ),
     }
 
     TRACKER_DIR.mkdir(parents=True, exist_ok=True)
@@ -203,6 +215,9 @@ def append_batch_tracker(
 
 
 def get_ocr(lang: str, ocr_device: str = "auto", gpu_device_id: int = 0):
+    """The get_ocr() function returns a pointer to a PaddleOCR object. If there
+    isn't already a selected ocr_engine a new one is created using the
+    make_ocr() fucntion."""
     global ocr_engine, ocr_language
     cache_key = f"{lang}|{ocr_device}|{gpu_device_id}"
     if PaddleOCR is None:
@@ -218,6 +233,10 @@ def get_ocr(lang: str, ocr_device: str = "auto", gpu_device_id: int = 0):
 
 
 def is_unknown(value: str) -> bool:
+    """The is_unknown() function returns True if the value parameter is unknown
+    and False otherwise. It checks if it doesn't have a value at all first, then
+    if the value begins with the string unknown, and finally if the value is
+    Project or Document. If any of those are true it returns True."""
     return (
         not value
         or value.lower().startswith("unknown")
@@ -250,6 +269,11 @@ def suggested_filename(metadata: dict[str, str], source_name: str) -> str:
 
 
 def document_status(metadata: dict[str, str]) -> str:
+    """The document_status() function returns either needs_review or ready based
+    on the metadata parameter. If any of the fields in REQUIRED_METADATA_FIELDS
+    are empty in the metadata parameter the function returns needs_review.
+    Otherwise ready is returned.
+    """
     return (
         "needs_review"
         if any(
@@ -259,17 +283,25 @@ def document_status(metadata: dict[str, str]) -> str:
     )
 
 
-def normalize_document(document: dict[str, Any]) -> dict[str, Any]:
-    """The normalize_document() function returns a checked/corrected document
-    dictionary. The folder_name, file_name, and status fields are checked, and
-    if empty or wrong corrected via the suggested_folder(),
-    suggested_filename(), and document_status() functions to match the metadata
-    gathered from the file."""
-    metadata = document["metadata"]
-    document.setdefault("folder_name", suggested_folder(metadata))
-    document.setdefault(
-        "file_name", suggested_filename(metadata, document["source_name"])
-    )
+def sync_document_metadata(
+    document: dict[str, Any],
+    auto_folder: bool = False,
+    auto_file_name: bool = False,
+) -> dict[str, Any]:
+    """The sync_document_metadata() function returns a document with updated
+    folder name, file name, and status. The metadata for the document is stored
+    in the metadata variable. If the auto_folder parameter is True or the
+    document parameter
+    """
+    metadata = document.setdefault("metadata", {})
+    source_name = str(document.get("source_name", "document.pdf"))
+
+    if auto_folder or "folder_name" not in document:
+        document["folder_name"] = suggested_folder(metadata)
+
+    if auto_file_name or "file_name" not in document:
+        document["file_name"] = suggested_filename(metadata, source_name)
+
     document["status"] = (
         "lookup_only"
         if document.get("is_lookup_document")
@@ -280,8 +312,8 @@ def normalize_document(document: dict[str, Any]) -> dict[str, Any]:
 
 def find_document(state: dict[str, Any], document_id: str) -> dict[str, Any] | None:
     """The find_document() function returns the document in the state parameter
-    with id matching the document_id parameter or None if there aren't any 
-    documents in the state parameter with an id that matches the document_id 
+    with id matching the document_id parameter or None if there aren't any
+    documents in the state parameter with an id that matches the document_id
     parameter."""
     return next(
         (doc for doc in state.get("documents", []) if doc.get("id") == document_id),
@@ -290,32 +322,32 @@ def find_document(state: dict[str, Any], document_id: str) -> dict[str, Any] | N
 
 
 def json_payload() -> dict[str, Any]:
-    """The json_payload() function returns the fields given in the body of the 
-     POST or PATCH request from the browser these include scan settings and 
-     document metadata. This is done using the build in get_json() function for
-     the request object imported from Flask.
-     """
+    """The json_payload() function returns the fields given in the body of the
+    POST or PATCH request from the browser these include scan settings and
+    document metadata. This is done using the build in get_json() function for
+    the request object imported from Flask.
+    """
     return request.get_json(force=True) or {}
 
 
 def resolve_folder(value: str) -> Path:
-    """The resolve_folder() function returns a fully expanded and resolved 
-    path ~. If the tilde is used expanduser() replaces with the users home 
-    directory. resolve() then removes any relative paths such as 
+    """The resolve_folder() function returns a fully expanded and resolved
+    path ~. If the tilde is used expanduser() replaces with the users home
+    directory. resolve() then removes any relative paths such as
     documents/.../project1 to ensure an absolute path."""
     return Path(value).expanduser().resolve()
 
 
 def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
     """The scan_settings() function returns a dictionary with the current scan
-    settings set by the payload parameter. 
+    settings set by the payload parameter.
 
-    input folder, output folder, config path, project code, project code, dpi, 
-    and ocr device are all pulled from the parameter the get() function. The 
-    other settings document type, language, gpu device id, parrallel ocr, ocr 
-    workers, and threads per worker are all kept as defaults which can be 
-    changed by the user manually in this function if necessary. Both input and 
-    output folders are put through the  resolve_folder() function to make sure 
+    input folder, output folder, config path, project code, project code, dpi,
+    and ocr device are all pulled from the parameter the get() function. The
+    other settings document type, language, gpu device id, parrallel ocr, ocr
+    workers, and threads per worker are all kept as defaults which can be
+    changed by the user manually in this function if necessary. Both input and
+    output folders are put through the  resolve_folder() function to make sure
     it is a valid path."""
     input_folder_raw = (payload.get("input_folder") or "").strip()
     output_folder_raw = (payload.get("output_folder") or "").strip()
@@ -342,7 +374,10 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def scan_batch(
-    input_folder: Path, ocr, config: dict[str, Any], settings: dict[str, Any],
+    input_folder: Path,
+    ocr,
+    config: dict[str, Any],
+    settings: dict[str, Any],
     progress_callback=None,
 ) -> list[dict[str, Any]]:
     """OCR all PDFs as one related packet and share metadata across the packet.
@@ -412,7 +447,7 @@ def scan_batch(
             )
         )
         documents.append(
-            normalize_document(
+            sync_document_metadata(
                 {
                     "id": uuid.uuid4().hex,
                     "source_path": scanned_document["source_path"],
@@ -436,20 +471,9 @@ def scan_batch(
             document["file_name"] = suggested_filename(
                 document["metadata"], document["source_name"]
             )
-            normalize_document(document)
+            sync_document_metadata(document)
 
     return documents
-
-
-def refresh_document_names(
-    document: dict[str, Any], auto_folder: bool = True, auto_file_name: bool = True
-) -> dict[str, Any]:
-    metadata = document["metadata"]
-    if auto_folder:
-        document["folder_name"] = suggested_folder(metadata)
-    if auto_file_name:
-        document["file_name"] = suggested_filename(metadata, document["source_name"])
-    return normalize_document(document)
 
 
 def load_config_from_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -472,7 +496,7 @@ def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
 
 
 def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
-    """The _folder_project_and_section() function returns the project code and 
+    """The _folder_project_and_section() function returns the project code and
     section taken from the output_folder parameter. It splits the parameter on
     the . and the - to determine the project code and section and returns both."""
     name = output_folder.name.strip()
@@ -509,7 +533,9 @@ def refresh_batch_property_fields_from_sdat(
         # unless SDAT confirms it.
         records = _lookup_by_tax_id(seed.tax_id, county)
     elif changed_field == "address":
-        records = lookup_maryland_property_by_address(seed.address, county=county, limit=25)
+        records = lookup_maryland_property_by_address(
+            seed.address, county=county, limit=25
+        )
     else:
         # For map/parcel/section, ignore stale stronger identifiers and query only
         # the edited property identifiers. Empty text avoids a full OCR-text join.
@@ -518,11 +544,20 @@ def refresh_batch_property_fields_from_sdat(
         if enriched != query_seed:
             values = {
                 field: getattr(enriched, field)
-                for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section")
+                for field in (
+                    "lot",
+                    "address",
+                    "tax_map",
+                    "parcel",
+                    "tax_id",
+                    "section",
+                )
             }
             for batch_document in documents:
                 batch_document["metadata"].update(values)
-                refresh_document_names(batch_document, auto_folder=True, auto_file_name=True)
+                sync_document_metadata(
+                    batch_document, auto_folder=True, auto_file_name=True
+                )
             return values
         return None
 
@@ -536,7 +571,7 @@ def refresh_batch_property_fields_from_sdat(
     }
     for batch_document in documents:
         batch_document["metadata"].update(values)
-        refresh_document_names(batch_document, auto_folder=True, auto_file_name=True)
+        sync_document_metadata(batch_document, auto_folder=True, auto_file_name=True)
     return values
 
 
@@ -564,7 +599,7 @@ def apply_document_update(
     if shared_updates:
         for batch_document in state.get("documents", []):
             batch_document["metadata"].update(shared_updates)
-            refresh_document_names(
+            sync_document_metadata(
                 batch_document, auto_folder=True, auto_file_name=True
             )
 
@@ -600,7 +635,7 @@ def apply_document_update(
             safe_path_part(stem, Path(document["source_name"]).stem) + ".pdf"
         )
 
-    return normalize_document(document)
+    return sync_document_metadata(document)
 
 
 def metadata_keyword_text(document: dict[str, Any]) -> str:
@@ -638,7 +673,11 @@ def _ocr_item_pdf_rect(
             x0, y0, x1, y1 = [float(value) for value in raw]
         else:
             # Compatibility with four-point PaddleOCR polygons.
-            points = [point for point in raw if isinstance(point, (list, tuple)) and len(point) >= 2]
+            points = [
+                point
+                for point in raw
+                if isinstance(point, (list, tuple)) and len(point) >= 2
+            ]
             if not points:
                 return None
             xs = [float(point[0]) for point in points]
@@ -883,11 +922,11 @@ def api_state():
     and documents from the documents.json file in the .review_state folder in
     project directory. Each document is then checked and corrected version based
     on the metadata contained in the documents.json file. jsonify() is then
-    called on the state variable which returns a Response object containing the 
+    called on the state variable which returns a Response object containing the
     json pulled from documents.json."""
     state = read_state()
     state["documents"] = [
-        normalize_document(document) for document in state.get("documents", [])
+        sync_document_metadata(document) for document in state.get("documents", [])
     ]
     return jsonify(state)
 
@@ -924,7 +963,9 @@ def api_update_output_folder():
     except (OSError, ValueError) as error:
         return api_error(str(error), 400)
     write_state(state)
-    return jsonify({"output_folder": str(output_folder), "settings": state.get("settings", {})})
+    return jsonify(
+        {"output_folder": str(output_folder), "settings": state.get("settings", {})}
+    )
 
 
 @app.get("/api/scan-progress")
@@ -942,10 +983,14 @@ def api_scan():
     output_folder = Path(settings["output_folder"])
 
     if not settings["input_folder"]:
-        finish_scan_progress(failed=True, message="Scan failed: Input folder is required.")
+        finish_scan_progress(
+            failed=True, message="Scan failed: Input folder is required."
+        )
         return api_error("Input folder is required.", 400)
     if not settings["output_folder"]:
-        finish_scan_progress(failed=True, message="Scan failed: Output folder is required.")
+        finish_scan_progress(
+            failed=True, message="Scan failed: Output folder is required."
+        )
         return api_error("Output folder is required.", 400)
     if not input_folder.is_dir():
         finish_scan_progress(
@@ -967,10 +1012,7 @@ def api_scan():
         )
         settings["project_code_override"] = settings["project_code"]
     else:
-        settings["project_code"] = safe_path_part(
-            detected_project_code,
-            "Project"
-        )
+        settings["project_code"] = safe_path_part(detected_project_code, "Project")
         settings["project_code_override"] = ""
     use_single_engine = (
         str(settings.get("ocr_device", "auto")).lower() == "gpu"
@@ -998,7 +1040,9 @@ def api_scan():
             document["metadata"]["section"] = settings["section"]
 
     write_state(state)
-    finish_scan_progress(message=f"Scan complete. {len(state['documents'])} document(s) ready for review.")
+    finish_scan_progress(
+        message=f"Scan complete. {len(state['documents'])} document(s) ready for review."
+    )
     return jsonify(state)
 
 
@@ -1015,7 +1059,7 @@ def api_update_document(document_id: str):
         {
             "settings": state.get("settings", {}),
             "documents": [
-                normalize_document(doc) for doc in state.get("documents", [])
+                sync_document_metadata(doc) for doc in state.get("documents", [])
             ],
             "updated": updated,
         }
@@ -1036,7 +1080,9 @@ def api_file_document(document_id: str):
 
     try:
         output_folder = update_output_folder_setting(
-            state, payload.get("output_folder") or state.get("settings", {}).get("output_folder", "")
+            state,
+            payload.get("output_folder")
+            or state.get("settings", {}).get("output_folder", ""),
         )
     except (OSError, ValueError) as error:
         return api_error(str(error), 400)
@@ -1063,7 +1109,9 @@ def api_file_all_documents():
     state = read_state()
     try:
         output_folder = update_output_folder_setting(
-            state, payload.get("output_folder") or state.get("settings", {}).get("output_folder", "")
+            state,
+            payload.get("output_folder")
+            or state.get("settings", {}).get("output_folder", ""),
         )
     except (OSError, ValueError) as error:
         return api_error(str(error), 400)
@@ -1093,7 +1141,9 @@ def api_file_all_documents():
     try:
         append_batch_tracker(normal_documents, output_folder, filed_documents)
     except OSError as error:
-        return api_error(f"Documents were filed, but the tracker could not be updated: {error}", 500)
+        return api_error(
+            f"Documents were filed, but the tracker could not be updated: {error}", 500
+        )
 
     # Delete lookup-only source records only after every permanent document succeeds.
     for lookup in lookup_documents:
@@ -1107,22 +1157,20 @@ def api_file_all_documents():
                 source.unlink(missing_ok=True)
     state["documents"] = []
     write_state(state)
-    return jsonify(
-        {"settings": state.get("settings", {}), "documents": []}
-    )
+    return jsonify({"settings": state.get("settings", {}), "documents": []})
 
 
 @app.get("/documents/<document_id>/pdf")
 def document_pdf(document_id: str):
     """The document_pdf() function returns a response object which holds a pdf
-    with either a selected document or file-not-found.pdf if there is 
-    an error. It begins by trying to run find_document() with parameters 
-    read_state() and document_id. If a document is found matching those 
+    with either a selected document or file-not-found.pdf if there is
+    an error. It begins by trying to run find_document() with parameters
+    read_state() and document_id. If a document is found matching those
     parameters it's information is returned otherwise None is returned. If that
-    is successful the function returns a Response object via the send_file() 
+    is successful the function returns a Response object via the send_file()
     function with the path to the document, document type, and as_attachment
-    parameters. If this sends an error or if the find_document() function 
-    returned none the file-not-found.pdf file in the project directory is 
+    parameters. If this sends an error or if the find_document() function
+    returned none the file-not-found.pdf file in the project directory is
     displayed via the send_file() function."""
     try:
         document = find_document(read_state(), document_id)
@@ -1145,17 +1193,7 @@ def document_pdf(document_id: str):
         )
 
 
-"""Where it all begins. app is the Flask object created in the imports
-and constants section. This object connects all of the files together.
-The run function runs app.py on a local development server. For this
-project this was the easiest way to create a user interface to interact
-with the documents being processed. Once this is created it is stagnant
-until a user opens the the browser with the address 
-http://127.0.0.1:5055. Once the user does this app uses the 
-@app.get("/") decorator to call the index() function. This means that 
-when the browser requests GET http://localhost:5055/(Which happens as 
-soon as you open the above address) the app object searches through
-defined routes and finds @app.get("/") pointing to the index() function
-and knows to call it."""
+"""Where it all begins. app is the Flask object created in the imports and constants section. This object connects all of the files together. The run function runs app.py on a local development server. For this project this was the easiest way to create a user interface to interact with the documents being processed. Once this is created it is stagnant until a user opens the the browser with the address http://127.0.0.1:5055. Once the user does this app uses the @app.get("/") decorator to call the index() function. This means that 
+when the browser requests GET http://localhost:5055/(Which happens as soon as you open the above address) the app object searches through defined routes and finds @app.get("/") pointing to the index() function and knows to call it."""
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5055, debug=True)
