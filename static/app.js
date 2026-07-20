@@ -26,6 +26,8 @@ const fields = {
 let browseTargetField = null;
 
 let scanProgressTimer = null;
+let scanElapsedTimer = null;
+let scanStartedAt = null;
 let renderedProgressCount = 0;
 
 function resetScanProgressPanel() {
@@ -40,7 +42,12 @@ function resetScanProgressPanel() {
 function renderScanProgress(data) {
   const panel = $('scanProgressPanel');
   panel.classList.toggle('failed', Boolean(data.failed));
-  $('scanElapsed').textContent = `${Number(data.elapsed || 0).toFixed(1)} s`;
+  // The elapsed timer is updated locally by the browser so a delayed Flask
+  // progress response cannot freeze or jump the visible timer. The server's
+  // elapsed value is only used when no local scan clock is active.
+  if (scanStartedAt === null) {
+    $('scanElapsed').textContent = `${Number(data.elapsed || 0).toFixed(1)} s`;
+  }
 
   const messages = data.messages || [];
   const container = $('scanProgressMessages');
@@ -71,16 +78,42 @@ async function pollScanProgress() {
   }
 }
 
+function updateLocalScanElapsed() {
+  if (scanStartedAt === null) return;
+
+  // Date.now() measures from the original start time rather than incrementing a
+  // counter. This prevents timer drift when the browser or OCR work delays an
+  // individual interval callback.
+  const elapsedSeconds = Math.max(0, (Date.now() - scanStartedAt) / 1000);
+  $('scanElapsed').textContent = `${elapsedSeconds.toFixed(1)} s`;
+}
+
 function startScanProgressPolling() {
   resetScanProgressPanel();
+
   clearInterval(scanProgressTimer);
+  clearInterval(scanElapsedTimer);
+
+  scanStartedAt = Date.now();
+  updateLocalScanElapsed();
+
+  // Progress information still comes from Flask, but elapsed time is maintained
+  // independently in the browser so slow progress responses cannot stall it.
   pollScanProgress();
   scanProgressTimer = setInterval(pollScanProgress, 300);
+  scanElapsedTimer = setInterval(updateLocalScanElapsed, 100);
 }
 
 async function stopScanProgressPolling({ failed = false } = {}) {
   clearInterval(scanProgressTimer);
+  clearInterval(scanElapsedTimer);
   scanProgressTimer = null;
+  scanElapsedTimer = null;
+
+  // Paint the final locally measured time before disabling the local clock.
+  updateLocalScanElapsed();
+  scanStartedAt = null;
+
   await pollScanProgress();
   if (failed) $('scanProgressPanel').classList.add('failed');
   setTimeout(() => $('scanProgressPanel').classList.add('hidden'), failed ? 0 : 0);
