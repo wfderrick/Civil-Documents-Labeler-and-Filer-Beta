@@ -18,6 +18,7 @@ from sdat import (
     LOOKUP_DOCUMENT_TYPE,
     SdatSearchTerms,
     extract_tax_id_parts,
+    lookup_by_tax_id,
     lookup_maryland_property_by_address,
     lookup_maryland_property_records,
     metadata_from_sdat_record,
@@ -60,19 +61,9 @@ def extract_document_metadata_votes(
     ]
 
 
-def _lookup_by_tax_id(tax_id: str, county: str = "") -> list[dict[str, Any]]:
-    """Perform the fastest, most specific SDAT lookup for a Tax ID."""
-    district, account_number = extract_tax_id_parts(tax_id)
-    if not district or not account_number:
-        return []
-    return lookup_maryland_property_records(
-        SdatSearchTerms(
-            county=county,
-            tax_id=tax_id,
-            district=district,
-            account_number=account_number,
-        )
-    )
+
+# Backward-compatible alias for older callers.
+_lookup_by_tax_id = lookup_by_tax_id
 
 
 def _apply_sdat_record_to_shared(

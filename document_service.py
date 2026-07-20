@@ -1,9 +1,18 @@
 from __future__ import annotations
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from metadata_extraction import ExtractedMetadata, safe_path_part, unique_path
 from pdf_processing import write_pdf_metadata
+from sdat import (
+    LOOKUP_DOCUMENT_TYPE,
+    lookup_by_tax_id,
+    enrich_metadata_with_sdat,
+    lookup_maryland_property_by_address,
+    metadata_from_sdat_record,
+)
+from state_store import load_config_from_state
 REQUIRED_METADATA_FIELDS = ("lot", "address", "project_code", "document_type")
 OPTIONAL_METADATA_FIELDS = ("tax_map", "parcel", "tax_id", "section")
 
@@ -110,6 +119,81 @@ def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
         tax_id=str(metadata.get("tax_id", "")),
         section=str(metadata.get("section", "")),
     )
+
+
+def refresh_batch_property_fields_from_sdat(
+    state: dict[str, Any], changed_field: str
+) -> dict[str, str] | None:
+    """Validate an edited property field with SDAT and synchronize the batch.
+
+    This business-layer function intentionally lives outside ``app.py`` so that
+    reusable document logic never imports the Flask entry point.  Keeping the
+    dependency direction one-way prevents circular imports during application
+    startup.
+    """
+    documents = [
+        doc for doc in state.get("documents", []) if not doc.get("is_lookup_document")
+    ]
+    if not documents:
+        return None
+
+    config = load_config_from_state(state)
+    if not config.get("sdat_lookup", True):
+        return None
+
+    seed = metadata_from_dict(documents[0].get("metadata", {}))
+    county = str(config.get("default_county", "") or "")
+    records: list[dict[str, Any]] = []
+
+    if changed_field == "tax_id":
+        records = lookup_by_tax_id(seed.tax_id, county)
+    elif changed_field == "address":
+        records = lookup_maryland_property_by_address(
+            seed.address, county=county, limit=25
+        )
+    else:
+        query_seed = replace(seed, tax_id="", address="Unknown Address")
+        enriched = enrich_metadata_with_sdat(query_seed, "", config)
+        if enriched == query_seed:
+            return None
+
+        values = {
+            field: getattr(enriched, field)
+            for field in (
+                "lot",
+                "address",
+                "tax_map",
+                "parcel",
+                "tax_id",
+                "section",
+            )
+        }
+        for batch_document in documents:
+            batch_document["metadata"].update(values)
+            sync_document_metadata(
+                batch_document, auto_folder=True, auto_file_name=True
+            )
+        return values
+
+    if not records:
+        return None
+
+    enriched = metadata_from_sdat_record(seed, records[0])
+    values = {
+        field: getattr(enriched, field)
+        for field in (
+            "lot",
+            "address",
+            "tax_map",
+            "parcel",
+            "tax_id",
+            "section",
+        )
+    }
+    for batch_document in documents:
+        batch_document["metadata"].update(values)
+        sync_document_metadata(batch_document, auto_folder=True, auto_file_name=True)
+    return values
 
 def apply_document_update(
     state: dict[str, Any], document: dict[str, Any], payload: dict[str, Any]

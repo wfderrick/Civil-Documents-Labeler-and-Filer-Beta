@@ -64,6 +64,21 @@ def extract_tax_id_parts(tax_id: str) -> tuple[str, str]:
 
     return district.strip(), account_number.strip()
 
+
+def lookup_by_tax_id(tax_id: str, county: str = "") -> list[dict[str, Any]]:
+    """Perform the fastest, most specific SDAT lookup for a Tax ID."""
+    district, account_number = extract_tax_id_parts(tax_id)
+    if not district or not account_number:
+        return []
+    return lookup_maryland_property_records(
+        SdatSearchTerms(
+            county=county,
+            tax_id=tax_id,
+            district=district,
+            account_number=account_number,
+        )
+    )
+
 def is_sdat_lookup_document(text: str) -> bool:
     """Identify an SDAT printout using several stable page anchors."""
     normalized = normalize_for_fuzzy(text)
