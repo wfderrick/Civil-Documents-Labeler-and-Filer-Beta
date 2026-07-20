@@ -291,7 +291,7 @@ def sync_document_metadata(
     """The sync_document_metadata() function returns a document with updated
     folder name, file name, and status. The metadata for the document is stored
     in the metadata variable. If the auto_folder parameter is True or the
-    document parameter
+    document parameter doesn't contain a folder_name key the document folder_name key is created or changed to match the output of the suggested_folder() function called on the metadata variable. The same is done for file name except it is based on the auto_file_name parameter the file_name key and the suggested_filename() function. The status key in document is set everytime using the document_status() function unless it is a lookup only document.
     """
     metadata = document.setdefault("metadata", {})
     source_name = str(document.get("source_name", "document.pdf"))
