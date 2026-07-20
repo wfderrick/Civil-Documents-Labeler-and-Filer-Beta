@@ -87,3 +87,20 @@ Property synchronization priority is Tax ID first, then address. Editing Tax ID 
 - SDAT printouts are labeled **Lookup Only** and remain visible in the review queue.
 - Lookup Only documents are not filed; they are removed after all permanent documents file successfully.
 
+
+## Module architecture (Version 1.9 refactor)
+
+- `app.py`: Flask routes and batch workflow orchestration.
+- `pipeline.py`: batch metadata voting, batch SDAT synchronization, and compatibility exports.
+- `metadata_extraction.py`: OCR-text interpretation, regex/fuzzy matching, addresses, identifiers, and metadata models.
+- `ocr_service.py`: PaddleOCR model setup, GPU/CPU selection, PDF rendering, OCR workers, and layout extraction.
+- `sdat.py`: Maryland SDAT requests, record filtering, address/Tax ID lookup, and metadata enrichment.
+- `pdf_processing.py`: searchable text layer and PDF/XMP metadata writing.
+- `document_service.py`: document naming, status, updates, and filing.
+- `state_store.py`: persistent application state and configuration loading.
+- `tracker.py`: batch filing CSV tracker.
+- `scan_status.py`: thread-safe scan progress state.
+- `tax_id_utils.py`: Tax ID normalization, validation, parsing, formatting, and comparison.
+- `visual_classifier.py`: visual Field Notes classification and duplicate-type correction.
+
+The batch workflow, shared metadata voting, lookup-only behavior, SDAT synchronization, and File All behavior remain in place.

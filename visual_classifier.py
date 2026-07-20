@@ -212,3 +212,69 @@ def train_visual_classifier(training_root: str | Path, output_model: str | Path 
     print(f"Saved binary visual field-notes classifier to {output_model}")
     print("\nTraining summary:")
     print(classification_report(y_test, model.predict(X_test)))
+
+
+# Batch post-processing helpers moved from pipeline.py.
+from dataclasses import replace
+from typing import Any
+from metadata_extraction import Config, ExtractedMetadata
+
+PLAN_DOCUMENT_TYPES = {"Site Plan", "House Location", "Wall Check"}
+
+def _field_notes_visual_threshold(config: Config) -> float:
+    try:
+        return float(config.get("visual_field_notes_threshold", 0.70))
+    except Exception:
+        return 0.70
+
+def fix_duplicate_document_types_with_visual_classifier(
+    votes: list[ExtractedMetadata],
+    scanned_documents: list[dict[str, Any]],
+    config: Config,
+) -> list[ExtractedMetadata]:
+    """Use visual classification to catch field notes mislabeled as plan documents.
+
+    This is intentionally a post-processing safety net. It only runs when there
+    are duplicate plan document types in the same batch, because that is the
+    common signal that Field Notes were OCR-labeled as Site Plan/Wall Check/etc.
+    It does not use OCR text; it renders the PDF and classifies the page visuals.
+    """
+    if not config.get("visual_field_notes_classifier", True):
+        return votes
+
+    by_type: dict[str, list[int]] = {}
+    for index, metadata in enumerate(votes):
+        by_type.setdefault(metadata.document_type, []).append(index)
+
+    updated = list(votes)
+    threshold = _field_notes_visual_threshold(config)
+
+    for document_type, indexes in by_type.items():
+        if (
+            document_type == "Field Notes"
+            or document_type not in PLAN_DOCUMENT_TYPES
+            or len(indexes) < 2
+        ):
+            continue
+
+        scored: list[tuple[float, int, str]] = []
+        for index in indexes:
+            source_path = scanned_documents[index].get(
+                "source_path"
+            ) or scanned_documents[index].get("path")
+            if not source_path:
+                continue
+            label, confidence = classify_pdf_visual(source_path)
+            if label == FIELD_NOTES_LABEL:
+                scored.append((confidence, index, label))
+
+        # Convert visually confirmed field notes. Keep at least one original plan type.
+        scored.sort(reverse=True)
+        for confidence, index, _label in scored:
+            remaining_same_type = sum(
+                1 for item in updated if item.document_type == document_type
+            )
+            if confidence >= threshold and remaining_same_type > 1:
+                updated[index] = replace(updated[index], document_type="Field Notes")
+
+    return updated

@@ -2,40 +2,52 @@
 
 from __future__ import annotations
 
-import csv
-import json
-import shutil
 import threading
-import time
 import uuid
-from datetime import datetime
-import fitz
-
-try:
-    import pikepdf
-except Exception:  # optional, metadata still works without it
-    pikepdf = None
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
 from flask import Flask, jsonify, render_template, request, send_file
 
+from ocr_service import make_ocr, ocr_pdf_batch
+
+from sdat import enrich_metadata_with_sdat
+
+from metadata_extraction import load_config
+
 from pipeline import (
-    ExtractedMetadata,
     LOOKUP_DOCUMENT_TYPE,
     choose_batch_metadata_by_vote,
     _lookup_by_tax_id,
-    enrich_metadata_with_sdat,
     lookup_maryland_property_by_address,
     metadata_from_sdat_record,
-    load_config,
     merge_batch_metadata,
-    make_ocr,
-    ocr_pdf_batch,
     safe_path_part,
-    unique_path,
 )
+
+from document_service import (
+    apply_document_update,
+    file_document_to_output,
+    find_document,
+    metadata_from_dict,
+    suggested_filename,
+    suggested_folder,
+    sync_document_metadata,
+)
+from scan_status import (
+    add_scan_progress,
+    finish_scan_progress,
+    reset_scan_progress,
+    scan_progress_snapshot,
+)
+from state_store import (
+    read_state,
+    write_state,
+    update_output_folder_setting,
+    load_config_from_state,
+)
+from tracker import append_batch_tracker
 
 try:
     from paddleocr import PaddleOCR
@@ -71,147 +83,10 @@ _SCAN_PROGRESS: dict[str, Any] = {
 """FUNCTION DEFINITION SECTION"""
 
 
-def reset_scan_progress() -> None:
-    """The reset_scan_progress() function clears previous information from the
-    _SCAN_PROGRESS dictionary to start fresh when a new batch of documents is
-    being scanned."""
-    with _SCAN_PROGRESS_LOCK:
-        _SCAN_PROGRESS.update(
-            {
-                "active": True,
-                "finished": False,
-                "failed": False,
-                "started_at": time.perf_counter(),
-                "messages": [],
-            }
-        )
-
-
-def add_scan_progress(message: str) -> None:
-    """The add_scan_progress() function takes in the message parameter and adds
-    it to the messages key in the _SCAN_PROGRESS dictionary."""
-    text = str(message or "").strip()
-    if not text:
-        return
-    with _SCAN_PROGRESS_LOCK:
-        elapsed = max(
-            0.0, time.perf_counter() - float(_SCAN_PROGRESS.get("started_at") or 0.0)
-        )
-        _SCAN_PROGRESS.setdefault("messages", []).append(
-            {
-                "text": text,
-                "elapsed": round(elapsed, 2),
-            }
-        )
-
-
-def finish_scan_progress(*, failed: bool = False, message: str = "") -> None:
-    """The finish_scan_progress() function sets the _SCAN_PROGRESS dictionary to
-    its finished state after a batch has finished scanning."""
-    if message:
-        add_scan_progress(message)
-    with _SCAN_PROGRESS_LOCK:
-        _SCAN_PROGRESS["active"] = False
-        _SCAN_PROGRESS["finished"] = True
-        _SCAN_PROGRESS["failed"] = failed
-
-
-def scan_progress_snapshot() -> dict[str, Any]:
-    """The scan_progress_snapshot() function returns total time, active,
-    finished, and failed scans and messages in the _SCAN_PROGRESS dictionary."""
-    with _SCAN_PROGRESS_LOCK:
-        started_at = float(_SCAN_PROGRESS.get("started_at") or 0.0)
-        elapsed = max(0.0, time.perf_counter() - started_at) if started_at else 0.0
-        return {
-            "active": bool(_SCAN_PROGRESS.get("active")),
-            "finished": bool(_SCAN_PROGRESS.get("finished")),
-            "failed": bool(_SCAN_PROGRESS.get("failed")),
-            "elapsed": round(elapsed, 2),
-            "messages": list(_SCAN_PROGRESS.get("messages", [])),
-        }
-
-
 def api_error(message: str, status_code: int = 500):
     """The api_error() function returns a Response object and integer holding
     an error message as a json and status code."""
     return jsonify({"error": message}), status_code
-
-
-def read_state() -> dict[str, Any]:
-    """The read_state() function returns all of the current settings and
-    document metadata stored in the documents.json file which is in the
-    .review_state folder in the project directory. If that file has not
-    been created yet it returns a default dictionary with empty settings
-    and documents."""
-    if not STATE_FILE.exists():
-        return dict(DEFAULT_STATE)
-    with STATE_FILE.open("r", encoding="utf-8") as state_file:
-        return json.load(state_file)
-
-
-def write_state(state: dict[str, Any]) -> None:
-    """The write_state() function updates the documents.json file with current
-    settings and document metadata. It begins by ensuring the parent directory
-    exists for the STATE_FILE. Then it opens the state file to either be created
-    if it doesn't exist or overwritten if it does. Finally dump() writes itself
-    onto the file."""
-    print(str(STATE_FILE.parent))
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with STATE_FILE.open("w", encoding="utf-8") as state_file:
-        json.dump(state, state_file, indent=2)
-
-
-def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
-    """The update_output_folder_setting() function sets the output folder in the
-    parameter to the new output folder given in the raw_value parameter after
-    trimming and validating it."""
-    value = str(raw_value or "").strip()
-    if not value:
-        raise ValueError("Output folder is required.")
-    output_folder = Path(value).expanduser().resolve()
-    output_folder.mkdir(parents=True, exist_ok=True)
-    state.setdefault("settings", {})["output_folder"] = str(output_folder)
-    return output_folder
-
-
-def append_batch_tracker(
-    documents: list[dict[str, Any]],
-    output_folder: Path,
-    filed_documents: list[dict[str, Any]],
-) -> None:
-    """The append_batch_tracker() function adds a new row to the ocr tracker
-    file when a batch of documents is filed with lot number,
-    address, location filed, time filed, project code, section, file count, and
-    files filed. It consolidates that information into a python dictionary and
-    uses the DictWriter() function to write a new line to the csv file. If the t
-    tracker hasn't been created yet a header is added at the start of the file
-    when it is created."""
-    if not documents or not filed_documents:
-        return
-
-    metadata = documents[0].get("metadata", {})
-    destination_folder = Path(filed_documents[0]["filed_path"]).parent
-    row = {
-        "lot_number": metadata.get("lot", ""),
-        "address": metadata.get("address", ""),
-        "location_filed": str(destination_folder),
-        "time_filed": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "project_code": metadata.get("project_code", ""),
-        "section": metadata.get("section", ""),
-        "file_count": len(filed_documents),
-        "files_filed": "|".join(
-            Path(doc["filed_path"]).name for doc in filed_documents
-        ),
-    }
-
-    TRACKER_DIR.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(row)
-    needs_header = not TRACKER_FILE.exists() or TRACKER_FILE.stat().st_size == 0
-    with TRACKER_FILE.open("a", newline="", encoding="utf-8") as tracker:
-        writer = csv.DictWriter(tracker, fieldnames=fieldnames)
-        if needs_header:
-            writer.writeheader()
-        writer.writerow(row)
 
 
 def get_ocr(lang: str, ocr_device: str = "auto", gpu_device_id: int = 0):
@@ -230,95 +105,6 @@ def get_ocr(lang: str, ocr_device: str = "auto", gpu_device_id: int = 0):
         )
         ocr_language = cache_key
     return ocr_engine
-
-
-def is_unknown(value: str) -> bool:
-    """The is_unknown() function returns True if the value parameter is unknown
-    and False otherwise. It checks if it doesn't have a value at all first, then
-    if the value begins with the string unknown, and finally if the value is
-    Project or Document. If any of those are true it returns True."""
-    return (
-        not value
-        or value.lower().startswith("unknown")
-        or value in {"Project", "Document"}
-    )
-
-
-def suggested_folder(metadata: dict[str, str]) -> str:
-    """The suggested_folder() function returns a string with a suggested folder name
-    based on the metadata parameter. The folder name follows the naming conventions
-    Lot # - Address(ex: Lot 1 - 34 Jibsail Street). After the lot and address
-    information are pulled from the metadata parameter they are passed into the
-    safe_path_part() function imported from pipeline.py to ensure they contain only
-    allowed characters and remove extra spaces."""
-    return safe_path_part(
-        f"Lot {metadata.get('lot', '')} - {metadata.get('address', '')}",
-        "Unknown Lot - Unknown Address",
-    )
-
-
-def suggested_filename(metadata: dict[str, str], source_name: str) -> str:
-    """The suggested_filename() function returns a string with a suggested file name
-    based on the metadata parameter. The file name follows the naming conventions
-    Document Type - Lot #(ex: Site Plan - Lot 1). After the lot and address
-    information are pulled from the metadata parameter they are passed into the
-    safe_path_part() function imported from pipeline.py to ensure they contain only
-    allowed characters and remove extra spaces."""
-    stem = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}"
-    return safe_path_part(stem, Path(source_name).stem) + ".pdf"
-
-
-def document_status(metadata: dict[str, str]) -> str:
-    """The document_status() function returns either needs_review or ready based
-    on the metadata parameter. If any of the fields in REQUIRED_METADATA_FIELDS
-    are empty in the metadata parameter the function returns needs_review.
-    Otherwise ready is returned.
-    """
-    return (
-        "needs_review"
-        if any(
-            is_unknown(metadata.get(field, "")) for field in REQUIRED_METADATA_FIELDS
-        )
-        else "ready"
-    )
-
-
-def sync_document_metadata(
-    document: dict[str, Any],
-    auto_folder: bool = False,
-    auto_file_name: bool = False,
-) -> dict[str, Any]:
-    """The sync_document_metadata() function returns a document with updated
-    folder name, file name, and status. The metadata for the document is stored
-    in the metadata variable. If the auto_folder parameter is True or the
-    document parameter doesn't contain a folder_name key the document folder_name key is created or changed to match the output of the suggested_folder() function called on the metadata variable. The same is done for file name except it is based on the auto_file_name parameter the file_name key and the suggested_filename() function. The status key in document is set everytime using the document_status() function unless it is a lookup only document.
-    """
-    metadata = document.setdefault("metadata", {})
-    source_name = str(document.get("source_name", "document.pdf"))
-
-    if auto_folder or "folder_name" not in document:
-        document["folder_name"] = suggested_folder(metadata)
-
-    if auto_file_name or "file_name" not in document:
-        document["file_name"] = suggested_filename(metadata, source_name)
-
-    document["status"] = (
-        "lookup_only"
-        if document.get("is_lookup_document")
-        else document_status(metadata)
-    )
-    return document
-
-
-def find_document(state: dict[str, Any], document_id: str) -> dict[str, Any] | None:
-    """The find_document() function returns the document in the state parameter
-    with id matching the document_id parameter or None if there aren't any
-    documents in the state parameter with an id that matches the document_id
-    parameter."""
-    return next(
-        (doc for doc in state.get("documents", []) if doc.get("id") == document_id),
-        None,
-    )
 
 
 def json_payload() -> dict[str, Any]:
@@ -476,29 +262,11 @@ def scan_batch(
     return documents
 
 
-def load_config_from_state(state: dict[str, Any]) -> dict[str, Any]:
-    settings = state.get("settings", {})
-    config_path = Path(settings.get("config_path") or DEFAULT_CONFIG_PATH).resolve()
-    return load_config(config_path if config_path.exists() else None)
-
-
-def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
-    return ExtractedMetadata(
-        lot=str(metadata.get("lot", "Unknown Lot")),
-        address=str(metadata.get("address", "Unknown Address")),
-        project_code=str(metadata.get("project_code", "Project")),
-        document_type=str(metadata.get("document_type", "Document")),
-        tax_map=str(metadata.get("tax_map", "")),
-        parcel=str(metadata.get("parcel", "")),
-        tax_id=str(metadata.get("tax_id", "")),
-        section=str(metadata.get("section", "")),
-    )
-
-
 def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     """The _folder_project_and_section() function returns the project code and
     section taken from the output_folder parameter. It splits the parameter on
-    the . and the - to determine the project code and section and returns both."""
+    the . and the - to determine the project code and section and returns both.
+    """
     name = output_folder.name.strip()
     if "." not in name:
         return name, ""
@@ -567,319 +335,19 @@ def refresh_batch_property_fields_from_sdat(
     enriched = metadata_from_sdat_record(seed, records[0])
     values = {
         field: getattr(enriched, field)
-        for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section")
+        for field in (
+            "lot",
+            "address",
+            "tax_map",
+            "parcel",
+            "tax_id",
+            "section",
+        )
     }
     for batch_document in documents:
         batch_document["metadata"].update(values)
         sync_document_metadata(batch_document, auto_folder=True, auto_file_name=True)
     return values
-
-
-def apply_document_update(
-    state: dict[str, Any], document: dict[str, Any], payload: dict[str, Any]
-) -> dict[str, Any]:
-    metadata = document["metadata"]
-
-    # These are batch-level values. If the user corrects one file, apply the
-    # correction to every document in the current batch.
-    shared_field_names = (
-        "lot",
-        "address",
-        "tax_map",
-        "parcel",
-        "tax_id",
-        "section",
-        "project_code",
-    )
-    shared_updates = {
-        field: payload[field] for field in shared_field_names if field in payload
-    }
-    changed_field = payload.get("changed_field", "")
-
-    if shared_updates:
-        for batch_document in state.get("documents", []):
-            batch_document["metadata"].update(shared_updates)
-            sync_document_metadata(
-                batch_document, auto_folder=True, auto_file_name=True
-            )
-
-    # If the user edits a property identifier, refresh the official SDAT address
-    # once and apply that address to every document in the batch.
-    if changed_field in {"tax_map", "parcel", "tax_id", "address", "section"}:
-        refresh_batch_property_fields_from_sdat(state, changed_field)
-
-    # Keep non-shared fields document-specific if they are ever posted by older UI/state.
-    for field in (*REQUIRED_METADATA_FIELDS, *OPTIONAL_METADATA_FIELDS):
-        if field in payload and field not in shared_updates:
-            metadata[field] = payload[field]
-
-    # Keep the lookup-only behavior synchronized with the editable document type.
-    # Lookup-only documents stay visible in the review queue, but they are not
-    # filed and are removed only after the permanent batch files successfully.
-    document["is_lookup_document"] = (
-        metadata.get("document_type") == LOOKUP_DOCUMENT_TYPE
-    )
-
-    if payload.get("auto_folder"):
-        document["folder_name"] = suggested_folder(metadata)
-    elif "folder_name" in payload:
-        document["folder_name"] = safe_path_part(
-            payload["folder_name"], suggested_folder(metadata)
-        )
-
-    if payload.get("auto_file_name"):
-        document["file_name"] = suggested_filename(metadata, document["source_name"])
-    elif "file_name" in payload:
-        stem = Path(payload["file_name"]).stem
-        document["file_name"] = (
-            safe_path_part(stem, Path(document["source_name"]).stem) + ".pdf"
-        )
-
-    return sync_document_metadata(document)
-
-
-def metadata_keyword_text(document: dict[str, Any]) -> str:
-    metadata = document.get("metadata", {})
-    custom_text = {
-        "lot": metadata.get("lot", ""),
-        "address": metadata.get("address", ""),
-        "project_code": metadata.get("project_code", ""),
-        "document_type": metadata.get("document_type", ""),
-        "tax_map": metadata.get("tax_map", ""),
-        "parcel": metadata.get("parcel", ""),
-        "tax_id": metadata.get("tax_id", ""),
-        "section": metadata.get("section", ""),
-        "source_name": document.get("source_name", ""),
-        "filed_at": datetime.now().isoformat(timespec="seconds"),
-    }
-    return "; ".join(f"{key}={value}" for key, value in custom_text.items() if value)
-
-
-def _ocr_item_pdf_rect(
-    item: dict[str, Any],
-    x_scale: float,
-    y_scale: float,
-) -> fitz.Rect | None:
-    """Convert one OCR item's pixel geometry to a PDF-point rectangle."""
-    raw = item.get("bbox") or item.get("polygon")
-    if raw is None:
-        return None
-    if hasattr(raw, "tolist"):
-        raw = raw.tolist()
-
-    try:
-        # Preferred normalized bbox format: [x0, y0, x1, y1].
-        if len(raw) == 4 and all(isinstance(value, (int, float)) for value in raw):
-            x0, y0, x1, y1 = [float(value) for value in raw]
-        else:
-            # Compatibility with four-point PaddleOCR polygons.
-            points = [
-                point
-                for point in raw
-                if isinstance(point, (list, tuple)) and len(point) >= 2
-            ]
-            if not points:
-                return None
-            xs = [float(point[0]) for point in points]
-            ys = [float(point[1]) for point in points]
-            x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
-    except (TypeError, ValueError):
-        return None
-
-    rect = fitz.Rect(x0 * x_scale, y0 * y_scale, x1 * x_scale, y1 * y_scale)
-    if rect.is_empty or rect.width <= 0 or rect.height <= 0:
-        return None
-    return rect
-
-
-def add_paddle_searchable_text_layer(pdf_path: Path, document: dict[str, Any]) -> None:
-    """Add selectable, invisible text using the stored PaddleOCR geometry.
-
-    PaddleOCR coordinates are measured in rendered-image pixels. They are
-    mapped back to PDF points using the image dimensions saved during OCR.
-    The text uses PDF render mode 3, so it remains invisible while still being
-    searchable and selectable in browsers and PDF readers.
-    """
-    ocr_pages = document.get("ocr_pages") or []
-    if not ocr_pages:
-        return
-
-    font = fitz.Font("helv")
-    inserted = 0
-
-    with fitz.open(pdf_path) as pdf:
-        for page_data in ocr_pages:
-            try:
-                page_index = int(page_data.get("page_index", 0))
-                page = pdf[page_index]
-                image_width = float(page_data.get("image_width") or 0)
-                image_height = float(page_data.get("image_height") or 0)
-            except (IndexError, TypeError, ValueError):
-                continue
-
-            if image_width <= 0 or image_height <= 0:
-                continue
-
-            x_scale = float(page.rect.width) / image_width
-            y_scale = float(page.rect.height) / image_height
-
-            for item in page_data.get("items", []):
-                text = str(item.get("text", "")).strip()
-                if not text:
-                    continue
-
-                rect = _ocr_item_pdf_rect(item, x_scale, y_scale)
-                if rect is None:
-                    continue
-
-                # Fit invisible text to the OCR rectangle.  The baseline is
-                # derived from Helvetica's ascender / descender rather than
-                # being placed at the bottom of the box, which keeps selection
-                # geometry aligned with the detected line.
-                natural_width = max(font.text_length(text, fontsize=1), 0.01)
-                height_size = rect.height / max(font.ascender - font.descender, 0.01)
-                width_size = (rect.width * 0.98) / natural_width
-                font_size = min(max(min(height_size, width_size), 1.0), 72.0)
-                baseline_y = rect.y0 + (font.ascender * font_size)
-                baseline = fitz.Point(rect.x0, baseline_y)
-
-                try:
-                    page.insert_text(
-                        baseline,
-                        text,
-                        fontsize=font_size,
-                        fontname="helv",
-                        render_mode=3,
-                        overlay=True,
-                    )
-                    inserted += 1
-                except Exception:
-                    continue
-
-        if inserted:
-            # Incremental save is fast and preserves the scanned page content.
-            pdf.saveIncr()
-
-
-def write_standard_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
-    metadata = document.get("metadata", {})
-    with fitz.open(pdf_path) as pdf:
-        pdf.set_metadata(
-            {
-                **pdf.metadata,  # type: ignore
-                "title": f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}",
-                "subject": metadata.get("address", ""),
-                "keywords": metadata_keyword_text(document),
-                "creator": "COA Barrett File Identifier and Sorter",
-            }
-        )
-        pdf.saveIncr()
-
-
-def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
-    """Write structured XMP metadata with a custom COA namespace."""
-    if pikepdf is None:
-        return
-
-    metadata = document.get("metadata", {})
-    namespace = "https://coabarrett.local/ns/ocr-file-sorter/1.0/"
-
-    try:
-        with pikepdf.Pdf.open(pdf_path, allow_overwriting_input=True) as pdf:
-            with pdf.open_metadata(set_pikepdf_as_editor=True) as meta:
-                try:
-                    meta.register_xml_namespace("coa", namespace)
-                except Exception:
-                    pass
-
-                title = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}".strip(
-                    " -"
-                )
-                if title:
-                    meta["dc:title"] = title
-                if metadata.get("address"):
-                    meta["dc:description"] = metadata.get("address", "")
-                meta["pdf:Keywords"] = metadata_keyword_text(document)
-
-                custom_fields = {
-                    "coa:Lot": metadata.get("lot", ""),
-                    "coa:Address": metadata.get("address", ""),
-                    "coa:ProjectCode": metadata.get("project_code", ""),
-                    "coa:DocumentType": metadata.get("document_type", ""),
-                    "coa:TaxMap": metadata.get("tax_map", ""),
-                    "coa:Parcel": metadata.get("parcel", ""),
-                    "coa:TaxID": metadata.get("tax_id", ""),
-                    "coa:Section": metadata.get("section", ""),
-                    "coa:OriginalFileName": document.get("source_name", ""),
-                    "coa:FiledAt": datetime.now().isoformat(timespec="seconds"),
-                    "coa:Application": "COA Barrett File Identifier and Sorter",
-                }
-                for key, value in custom_fields.items():
-                    if value:
-                        meta[key] = str(value)
-            pdf.save(pdf_path)
-    except Exception as exc:
-        print(f"Could not write XMP metadata to {pdf_path}: {exc}")
-
-
-def write_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
-    """Write standard metadata, structured XMP, and a PaddleOCR text layer."""
-    try:
-        add_paddle_searchable_text_layer(pdf_path, document)
-    except Exception as exc:
-        print(f"Could not add PaddleOCR searchable text layer to {pdf_path}: {exc}")
-
-    try:
-        write_standard_pdf_metadata(pdf_path, document)
-    except Exception as exc:
-        print(f"Could not write standard PDF metadata to {pdf_path}: {exc}")
-
-    write_xmp_metadata(pdf_path, document)
-
-
-def file_document_to_output(
-    document: dict[str, Any],
-    output_folder: Path,
-    copy_file: bool = False,
-    save_text: bool = False,
-    folder_name: str | None = None,
-    file_name: str | None = None,
-) -> dict[str, Any]:
-    source_path = Path(document["source_path"])
-    if not source_path.exists():
-        raise FileNotFoundError(f"Source PDF no longer exists: {source_path}")
-
-    resolved_folder = safe_path_part(
-        folder_name or document.get("folder_name", ""), "Unknown Lot - Unknown Address"
-    )
-    file_stem = Path(file_name or document.get("file_name", source_path.name)).stem
-    resolved_file_name = safe_path_part(file_stem, source_path.stem) + ".pdf"
-
-    destination_folder = output_folder / resolved_folder
-    destination_folder.mkdir(parents=True, exist_ok=True)
-    destination = unique_path(destination_folder / resolved_file_name)
-
-    if copy_file:
-        shutil.copy2(source_path, destination)
-    else:
-        shutil.move(str(source_path), destination)
-
-    write_pdf_metadata(destination, document)
-
-    if save_text:
-        destination.with_suffix(".txt").write_text(
-            document.get("ocr_text", ""), encoding="utf-8"
-        )
-
-    document.update(
-        {
-            "folder_name": resolved_folder,
-            "file_name": resolved_file_name,
-            "filed_path": str(destination),
-            "status": "filed",
-        }
-    )
-    return document
 
 
 """-----------------------------------------------------------------------------------------------"""
@@ -958,13 +426,17 @@ def api_update_output_folder():
     state = read_state()
     try:
         output_folder = update_output_folder_setting(
-            state, (request.get_json(silent=True) or {}).get("output_folder", "")
+            state,
+            (request.get_json(silent=True) or {}).get("output_folder", ""),
         )
     except (OSError, ValueError) as error:
         return api_error(str(error), 400)
     write_state(state)
     return jsonify(
-        {"output_folder": str(output_folder), "settings": state.get("settings", {})}
+        {
+            "output_folder": str(output_folder),
+            "settings": state.get("settings", {}),
+        }
     )
 
 
@@ -994,7 +466,8 @@ def api_scan():
         return api_error("Output folder is required.", 400)
     if not input_folder.is_dir():
         finish_scan_progress(
-            failed=True, message=f"Scan failed: Input folder not found: {input_folder}"
+            failed=True,
+            message=f"Scan failed: Input folder not found: {input_folder}",
         )
         return api_error(f"Input folder not found: {input_folder}", 400)
 
@@ -1032,7 +505,11 @@ def api_scan():
     state = {
         "settings": settings,
         "documents": scan_batch(
-            input_folder, ocr, config, settings, progress_callback=add_scan_progress
+            input_folder,
+            ocr,
+            config,
+            settings,
+            progress_callback=add_scan_progress,
         ),
     }
     if settings.get("section"):
@@ -1075,7 +552,8 @@ def api_file_document(document_id: str):
         return api_error("Document not found", 404)
     if document.get("is_lookup_document"):
         return api_error(
-            "Lookup-only SDAT records are removed after the batch is filed.", 400
+            "Lookup-only SDAT records are removed after the batch is filed.",
+            400,
         )
 
     try:
@@ -1142,7 +620,8 @@ def api_file_all_documents():
         append_batch_tracker(normal_documents, output_folder, filed_documents)
     except OSError as error:
         return api_error(
-            f"Documents were filed, but the tracker could not be updated: {error}", 500
+            f"Documents were filed, but the tracker could not be updated: {error}",
+            500,
         )
 
     # Delete lookup-only source records only after every permanent document succeeds.
