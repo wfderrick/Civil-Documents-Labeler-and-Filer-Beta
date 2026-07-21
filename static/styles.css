@@ -288,20 +288,21 @@ pre {
 
 
 .scan-progress-panel {
-  position: fixed;
-  top: 92px;
-  right: 22px;
-  z-index: 1600;
-  width: min(620px, calc(100vw - 44px));
-  max-height: min(520px, calc(100vh - 120px));
+  /* Keep scan feedback in normal page flow. An overlay prevented users from
+     reviewing completed mass-scan documents while later files were still OCRing. */
+  position: relative;
+  z-index: 1;
+  width: auto;
+  max-height: 260px;
+  margin: 12px 22px;
   display: grid;
-  grid-template-rows: auto auto minmax(120px, 1fr);
+  grid-template-rows: auto auto minmax(70px, 1fr);
   gap: 10px;
-  padding: 16px;
+  padding: 14px 16px;
   border: 1px solid #8ea4af;
   border-radius: 10px;
   background: #fff;
-  box-shadow: 0 18px 48px rgba(15, 40, 52, .28);
+  box-shadow: 0 6px 18px rgba(15, 40, 52, .14);
 }
 .scan-progress-header { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
 #scanElapsed { font-variant-numeric: tabular-nums; font-weight: 700; color: var(--accent-strong); }
@@ -309,7 +310,7 @@ pre {
 #scanProgressBar { width: 35%; height: 100%; border-radius: inherit; background: var(--accent); animation: scan-progress-indeterminate 1.25s ease-in-out infinite alternate; }
 .scan-progress-messages {
   overflow: auto;
-  min-height: 150px;
+  min-height: 70px;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -322,3 +323,913 @@ pre {
 .scan-progress-panel.failed { border-color: #b42318; }
 .scan-progress-panel.failed #scanProgressBar { background: #b42318; animation: none; width: 100%; }
 @keyframes scan-progress-indeterminate { from { transform: translateX(-20%); } to { transform: translateX(190%); } }
+
+/* Inline folder browsers stay directly below the field they belong to. */
+.folder-field-group {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.folder-field-group > label { margin-top: 0; }
+.folder-field-group > button { justify-self: start; }
+.folder-browser {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #b9c8d1;
+  border-radius: 8px;
+  background: #f8fbfc;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.8);
+}
+.folder-browser-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.folder-browser-close {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1;
+}
+.browse-current-path {
+  overflow: hidden;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: #475467;
+  font: 11px/1.35 Consolas, "Courier New", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browse-folder-list {
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  gap: 5px;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+.browse-folder-list button {
+  width: 100%;
+  min-height: 34px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Make the document classification the first and most prominent edit. */
+.document-type-card {
+  margin: 8px 0 16px;
+  padding: 14px;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f0fafb 0%, #ffffff 100%);
+  box-shadow: 0 5px 16px rgba(17, 106, 123, .11);
+}
+.document-type-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.document-type-heading h3 {
+  margin-top: 2px;
+  color: var(--accent-strong);
+  font-size: 18px;
+}
+.document-type-eyebrow {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.document-type-required {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: white;
+  font-size: 11px;
+  font-weight: 750;
+}
+.document-type-control { margin: 0; }
+.document-type-control select {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid #79aeb8;
+  border-radius: 8px;
+  padding: 8px 38px 8px 12px;
+  background: white;
+  color: #12343c;
+  font: 700 16px/1.2 "Segoe UI", Arial, sans-serif;
+  cursor: pointer;
+}
+.document-type-control select:focus {
+  outline: 3px solid rgba(17, 106, 123, .18);
+  border-color: var(--accent);
+}
+
+/* Compact, high-priority metadata cards in the review panel. */
+.document-type-card {
+  margin: 8px 0 12px;
+  padding: 11px 12px;
+}
+.document-type-heading { margin-bottom: 7px; }
+.document-type-control select { min-height: 42px; }
+.document-type-required { display: none; }
+
+.primary-metadata-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.primary-metadata-card {
+  margin: 0;
+  padding: 11px 12px;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f0fafb 0%, #ffffff 100%);
+  box-shadow: 0 5px 16px rgba(17, 106, 123, .11);
+  color: var(--accent-strong);
+  font-size: 16px;
+  font-weight: 700;
+}
+.primary-metadata-card input {
+  min-height: 42px;
+  border-color: #79aeb8;
+  border-radius: 8px;
+  color: #12343c;
+  font-size: 15px;
+  font-weight: 650;
+}
+.primary-metadata-card input:focus {
+  outline: 3px solid rgba(17, 106, 123, .18);
+  border-color: var(--accent);
+}
+.secondary-metadata-grid { margin-top: 2px; }
+.compact-file-options {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+@media (max-width: 1180px) {
+  .primary-metadata-grid { grid-template-columns: 1fr; }
+}
+
+/* --------------------------------------------------------------------------
+   Unified blue-card interface refresh
+   -------------------------------------------------------------------------- */
+:root {
+  --ink: #172033;
+  --muted: #66758c;
+  --line: #d5e0ef;
+  --panel: #ffffff;
+  --bg: #edf3fb;
+  --accent: #2f6fbd;
+  --accent-strong: #1f528f;
+  --accent-soft: #eaf3ff;
+  --accent-softer: #f6faff;
+  --accent-border: #9fc2eb;
+  --shadow-sm: 0 3px 10px rgba(39, 84, 135, .08);
+  --shadow-md: 0 10px 28px rgba(39, 84, 135, .13);
+}
+
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top right, rgba(85, 143, 207, .12), transparent 30rem),
+    linear-gradient(180deg, #f5f9ff 0, var(--bg) 320px);
+}
+
+.app-header {
+  min-height: 82px;
+  padding: 15px 24px;
+  border-bottom: 1px solid #c7d9ee;
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 4px 18px rgba(40, 81, 126, .08);
+  backdrop-filter: blur(10px);
+}
+
+.app-header h1 {
+  color: #173f70;
+  font-size: 25px;
+  letter-spacing: -.02em;
+}
+
+.app-header p { color: #6a7890; }
+
+button {
+  border-color: #c5d6e9;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #fff, #f6f9fd);
+  box-shadow: 0 2px 5px rgba(44, 79, 119, .06);
+  transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease, background .12s ease;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+  box-shadow: 0 5px 13px rgba(47, 111, 189, .14);
+  transform: translateY(-1px);
+}
+
+button.primary {
+  border-color: #2b67ad;
+  background: linear-gradient(180deg, #397cc9, #2b67ad);
+  box-shadow: 0 5px 14px rgba(47, 111, 189, .22);
+}
+
+button.primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, #3274be, #235a9b);
+}
+
+.layout { grid-template-columns: 350px minmax(0, 1fr); }
+
+.sidebar {
+  border-right: 1px solid #c9d9eb;
+  background: rgba(241, 246, 253, .82);
+  padding: 16px;
+}
+
+.panel {
+  border-color: #ccdaeb;
+  border-radius: 13px;
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.panel > h2,
+.panel-title-row h2 { color: #244d7a; }
+
+.settings-panel label { color: #40556f; }
+
+input,
+select {
+  border-color: #c3d3e7;
+  border-radius: 8px;
+  background: #fff;
+}
+
+input:focus,
+select:focus {
+  outline: 3px solid rgba(47, 111, 189, .16);
+  border-color: var(--accent);
+}
+
+#queueCount {
+  background: #e4f0ff;
+  color: #275d9c;
+}
+
+.document-list { gap: 9px; }
+
+.doc-row {
+  border-radius: 10px;
+  border-color: #d1deed;
+  background: #fbfdff;
+}
+
+.doc-row.active {
+  border-color: #6da2dc;
+  background: linear-gradient(180deg, #edf6ff, #f8fbff);
+  box-shadow: 0 5px 15px rgba(47, 111, 189, .13);
+}
+
+.viewer-shell { background: rgba(235, 242, 251, .62); }
+.pdf-panel { border-right-color: #c7d7e9; background: #dce7f3; }
+
+.editor-panel {
+  padding: 20px;
+  background: linear-gradient(180deg, #f9fbff 0%, #f2f7fd 100%);
+}
+
+.editor-header {
+  margin-bottom: 14px;
+  padding: 14px 15px;
+  border: 1px solid #cadbef;
+  border-radius: 12px;
+  background: rgba(255,255,255,.9);
+  box-shadow: var(--shadow-sm);
+}
+
+.editor-header h2 { color: #1e4a7c; }
+
+/* Keep every editable review field in the same blue-card family. */
+.document-type-card,
+.primary-metadata-card,
+.secondary-metadata-grid > label {
+  border: 1px solid var(--accent-border);
+  border-radius: 11px;
+  background: linear-gradient(180deg, var(--accent-soft) 0%, #f9fcff 100%);
+  box-shadow: 0 4px 13px rgba(47, 111, 189, .10);
+}
+
+.document-type-card {
+  border-width: 2px;
+  padding: 10px 12px;
+}
+
+.document-type-heading h3,
+.primary-metadata-card,
+.secondary-metadata-grid > label {
+  color: var(--accent-strong);
+}
+
+.document-type-eyebrow { color: #5c7899; }
+
+.document-type-control select,
+.primary-metadata-card input,
+.secondary-metadata-grid > label input {
+  border-color: #9ebcde;
+  background: rgba(255,255,255,.96);
+  color: #173f70;
+}
+
+.secondary-metadata-grid {
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.secondary-metadata-grid > label {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 11px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.secondary-metadata-grid > label input {
+  min-height: 40px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.compact-file-options {
+  gap: 10px;
+  margin-top: 12px;
+  padding: 0;
+  border: 0;
+}
+
+.compact-file-options .check {
+  flex: 1 1 180px;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--accent-soft), #f9fcff);
+  color: var(--accent-strong);
+  box-shadow: 0 4px 12px rgba(47, 111, 189, .08);
+  font-weight: 700;
+}
+
+.compact-file-options .check input { accent-color: var(--accent); }
+
+.folder-browser {
+  border-color: #a8c3e2;
+  border-radius: 11px;
+  background: linear-gradient(180deg, #edf6ff, #fbfdff);
+  box-shadow: var(--shadow-sm);
+}
+
+.browse-current-path {
+  border-color: #c5d7eb;
+  background: #fff;
+}
+
+.scan-progress-panel {
+  border-color: #a9c4e3;
+  background: linear-gradient(180deg, #f8fbff, #fff);
+  box-shadow: var(--shadow-md);
+}
+
+.scan-progress-bar { background: #dbe9f8; }
+#scanProgressBar { background: linear-gradient(90deg, #397cc9, #70a8e5); }
+.scan-progress-messages { border-color: #244e7b; background: #10243b; color: #ddecff; }
+.scan-progress-time { color: #7db4ed; }
+
+.toast {
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 11px;
+  background: #173f70;
+  box-shadow: 0 14px 36px rgba(20, 49, 83, .28);
+}
+
+@media (max-width: 1180px) {
+  .secondary-metadata-grid { grid-template-columns: 1fr; }
+}
+
+/* --------------------------------------------------------------------------
+   Blue-card settings panel redesign
+   -------------------------------------------------------------------------- */
+.settings-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(246,250,255,.98));
+}
+
+.settings-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 2px 10px;
+  border-bottom: 1px solid #d8e5f3;
+}
+
+.settings-panel-heading h2 {
+  margin-top: 2px;
+  color: #1e4a7c;
+  font-size: 19px;
+}
+
+.settings-eyebrow {
+  color: #6f86a3;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.settings-status-dot {
+  width: 11px;
+  height: 11px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #4f91d8;
+  box-shadow: 0 0 0 3px #dcecff;
+}
+
+.settings-section {
+  display: grid;
+  gap: 9px;
+}
+
+.settings-section + .settings-section {
+  padding-top: 13px;
+  border-top: 1px solid #dce7f3;
+}
+
+.settings-section-heading {
+  display: grid;
+  gap: 3px;
+  padding: 0 2px;
+}
+
+.settings-section-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-section-heading h3 {
+  color: #244d7a;
+  font-size: 14px;
+}
+
+.settings-section-heading p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.settings-section-icon {
+  min-width: 25px;
+  height: 25px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #acd0f5;
+  border-radius: 8px;
+  background: #eaf4ff;
+  color: #2c67a8;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.settings-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+}
+
+.settings-card-grid.single-column {
+  grid-template-columns: 1fr;
+}
+
+.settings-card,
+.settings-panel .folder-field-group.settings-card {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--accent-border);
+  border-radius: 11px;
+  background: linear-gradient(180deg, var(--accent-soft) 0%, #f9fcff 100%);
+  box-shadow: 0 4px 13px rgba(47, 111, 189, .09);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.settings-card-featured {
+  border-left: 4px solid #4f8fd4 !important;
+}
+
+.settings-card-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-card input,
+.settings-card select {
+  min-height: 39px;
+  border-color: #9ebcde;
+  background: rgba(255,255,255,.98);
+  color: #173f70;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-card input::placeholder {
+  color: #8b9eb4;
+  font-weight: 500;
+}
+
+.settings-scan-mode-card {
+  border-width: 2px;
+  background: linear-gradient(180deg, #e6f2ff, #f8fbff);
+}
+
+.settings-scan-mode-card select {
+  min-height: 43px;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.settings-help {
+  display: block;
+  color: #66809f;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.settings-browse-button {
+  width: 100%;
+  min-height: 36px;
+  border-color: #8fb4dc;
+  background: linear-gradient(180deg, #fff, #edf5ff);
+  color: #285f9d;
+}
+
+.settings-panel .folder-browser {
+  margin-top: 1px;
+  border-color: #91b7df;
+  background: linear-gradient(180deg, #e8f3ff, #fbfdff);
+}
+
+.settings-panel .browse-folder-list {
+  max-height: 190px;
+}
+
+@media (max-width: 1180px) {
+  .settings-card-grid { grid-template-columns: 1fr; }
+  .settings-card-wide { grid-column: auto; }
+}
+
+
+/* Compact settings panel */
+.settings-panel,.settings-section{padding:10px!important;margin-bottom:10px!important}
+.settings-card,.blue-card,.setting-card{padding:8px 10px!important;margin-bottom:8px!important;border-radius:10px!important}
+.settings-card h3,.settings-section h3{margin:0 0 6px 0!important;font-size:0.95rem!important}
+.settings-panel label{font-size:.82rem!important;margin-bottom:2px!important}
+.settings-panel input,
+.settings-panel select,
+.settings-panel textarea{padding:6px 8px!important;min-height:34px!important;font-size:.9rem!important}
+.settings-panel .form-row{margin-bottom:6px!important;gap:8px!important}
+.settings-panel button{padding:7px 12px!important}
+.folder-browser{max-height:140px!important}
+
+/* --------------------------------------------------------------------------
+   Compact settings + always-visible bottom document queue
+   -------------------------------------------------------------------------- */
+.layout {
+  height: calc(100vh - 82px);
+  min-height: 0;
+}
+
+.sidebar {
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.settings-panel {
+  gap: 7px !important;
+  padding: 9px !important;
+  margin-bottom: 0 !important;
+}
+
+.settings-panel-heading {
+  padding: 0 1px 6px;
+}
+
+.settings-panel-heading h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.settings-section {
+  gap: 5px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.settings-section + .settings-section {
+  padding-top: 6px !important;
+  border-top: 1px solid #dce7f3;
+}
+
+.settings-card-grid {
+  gap: 5px;
+}
+
+.settings-card,
+.settings-panel .folder-field-group.settings-card {
+  padding: 6px 7px !important;
+  border-radius: 8px !important;
+  margin: 0 !important;
+  gap: 4px;
+  box-shadow: 0 2px 7px rgba(47, 111, 189, .07);
+}
+
+.settings-card-featured {
+  border-left-width: 3px !important;
+}
+
+.settings-panel label {
+  gap: 3px;
+  margin: 0 !important;
+  font-size: 11px !important;
+}
+
+.settings-card input,
+.settings-card select,
+.settings-panel input,
+.settings-panel select {
+  min-height: 30px !important;
+  padding: 4px 7px !important;
+  font-size: 12px !important;
+}
+
+.settings-scan-mode-card select {
+  min-height: 32px !important;
+}
+
+.settings-browse-button,
+.settings-panel button {
+  min-height: 29px !important;
+  padding: 4px 9px !important;
+  font-size: 11px;
+}
+
+.folder-field-group {
+  gap: 4px;
+  margin-top: 0;
+}
+
+.settings-panel .folder-browser {
+  gap: 5px;
+  padding: 7px;
+}
+
+.settings-panel .browse-folder-list {
+  max-height: 110px !important;
+}
+
+.viewer-shell {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 148px;
+  overflow: hidden;
+}
+
+.review-pane {
+  height: 100%;
+  min-height: 0;
+}
+
+.empty-state {
+  min-height: 0;
+}
+
+.bottom-queue-panel {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 9px 12px;
+  border-width: 1px 0 0;
+  border-radius: 0;
+  box-shadow: 0 -4px 14px rgba(39, 84, 135, .08);
+  overflow: hidden;
+}
+
+.bottom-queue-panel .panel-title-row {
+  min-height: 25px;
+}
+
+.bottom-queue-panel .panel-title-row h2 {
+  font-size: 14px;
+}
+
+.bottom-queue-panel .document-list {
+  display: flex;
+  gap: 8px;
+  margin-top: 7px;
+  padding-bottom: 5px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+
+.bottom-queue-panel .doc-row {
+  flex: 0 0 230px;
+  min-width: 230px;
+  min-height: 76px;
+  max-height: 86px;
+  padding: 8px 10px;
+}
+
+@media (max-width: 980px) {
+  .layout {
+    height: auto;
+    min-height: calc(100vh - 82px);
+  }
+  .viewer-shell {
+    grid-template-rows: minmax(720px, auto) 148px;
+  }
+}
+
+
+.folder-browser{max-height:420px;}
+.browse-folder-list{max-height:300px;}
+.settings-card{padding:11px !important;margin-bottom:8px;transform:scale(1.0);}
+.settings-card input,.settings-card select,.settings-browse-button{min-height:38px;font-size:1rem;}
+.folder-field-group{margin-bottom:12px;}
+
+
+/* --------------------------------------------------------------------------
+   Layout correction: queue above workspace, roomier settings, usable browsers
+   -------------------------------------------------------------------------- */
+.viewer-shell {
+  grid-template-rows: 126px minmax(0, 1fr) !important;
+}
+
+.bottom-queue-panel {
+  grid-row: 1;
+  border-width: 0 0 1px !important;
+  border-radius: 0 !important;
+  box-shadow: 0 4px 14px rgba(39, 84, 135, .08) !important;
+  padding: 10px 14px !important;
+}
+
+.bottom-queue-panel .document-list {
+  height: 78px;
+  margin-top: 6px;
+}
+
+.bottom-queue-panel .doc-row {
+  flex: 0 0 220px;
+  min-width: 220px;
+  min-height: 58px;
+  max-height: 68px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+}
+
+.bottom-queue-panel .doc-row strong {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* About ten percent larger than the previous compact settings controls. */
+.settings-panel {
+  gap: 8px !important;
+  padding: 10px !important;
+}
+
+.settings-panel-heading {
+  padding-bottom: 7px !important;
+}
+
+.settings-panel-heading h2 {
+  font-size: 17px !important;
+}
+
+.settings-section {
+  gap: 6px !important;
+}
+
+.settings-card-grid {
+  gap: 6px !important;
+}
+
+.settings-card,
+.settings-panel .folder-field-group.settings-card {
+  padding: 8px 9px !important;
+  gap: 5px !important;
+  border-radius: 9px !important;
+}
+
+.settings-panel label {
+  gap: 4px !important;
+  font-size: 12px !important;
+}
+
+.settings-card input,
+.settings-card select,
+.settings-panel input,
+.settings-panel select {
+  min-height: 35px !important;
+  padding: 6px 8px !important;
+  font-size: 13px !important;
+}
+
+.settings-browse-button,
+.settings-panel button {
+  min-height: 33px !important;
+  padding: 6px 10px !important;
+  font-size: 12px !important;
+}
+
+.folder-field-group {
+  gap: 6px !important;
+  margin-bottom: 8px !important;
+}
+
+/* The folder browser must show several child folders, not one clipped row. */
+.settings-panel .folder-browser,
+.folder-browser {
+  max-height: none !important;
+  overflow: visible !important;
+  padding: 9px !important;
+  gap: 7px !important;
+}
+
+.settings-panel .browse-folder-list,
+.browse-folder-list {
+  height: 245px !important;
+  min-height: 245px !important;
+  max-height: 245px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  scrollbar-gutter: stable;
+}
+
+.settings-panel .browse-folder-list button,
+.browse-folder-list button {
+  min-height: 34px !important;
+  width: 100%;
+  text-align: left;
+}
+
+@media (max-width: 980px) {
+  .viewer-shell {
+    grid-template-rows: 126px minmax(720px, auto) !important;
+  }
+}
+
+/* Keep the attention banner compact: only three unresolved issues are rendered.
+   As an issue is fixed, the next remaining issue automatically takes its place. */
+.batch-warning {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.batch-warning-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.batch-warning-heading span {
+  font-size: 12px;
+  font-weight: 700;
+  opacity: .88;
+  white-space: nowrap;
+}
+.batch-warning ul {
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+.batch-warning li {
+  line-height: 1.3;
+}

@@ -120,19 +120,19 @@ def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
     )
 
 
-def refresh_batch_property_fields_from_sdat(
-    state: dict[str, Any], changed_field: str
+def refresh_property_fields_from_sdat(
+    state: dict[str, Any],
+    documents: list[dict[str, Any]],
+    changed_field: str,
 ) -> dict[str, str] | None:
-    """Validate an edited property field with SDAT and synchronize the batch.
+    """Validate one property edit with SDAT and update the supplied documents.
 
-    This business-layer function intentionally lives outside ``app.py`` so that
-    reusable document logic never imports the Flask entry point.  Keeping the
-    dependency direction one-way prevents circular imports during application
-    startup.
+    The caller chooses the synchronization scope. Batch scanning passes every
+    permanent document because those files represent one property. Mass
+    scanning passes only the document being edited so separate jobs can never
+    overwrite one another.
     """
-    documents = [
-        doc for doc in state.get("documents", []) if not doc.get("is_lookup_document")
-    ]
+    documents = [doc for doc in documents if not doc.get("is_lookup_document")]
     if not documents:
         return None
 
@@ -167,10 +167,10 @@ def refresh_batch_property_fields_from_sdat(
                 "section",
             )
         }
-        for batch_document in documents:
-            batch_document["metadata"].update(values)
+        for target_document in documents:
+            target_document["metadata"].update(values)
             sync_document_metadata(
-                batch_document, auto_folder=True, auto_file_name=True
+                target_document, auto_folder=True, auto_file_name=True
             )
         return values
 
@@ -189,20 +189,39 @@ def refresh_batch_property_fields_from_sdat(
             "section",
         )
     }
-    for batch_document in documents:
-        batch_document["metadata"].update(values)
-        sync_document_metadata(batch_document, auto_folder=True, auto_file_name=True)
+    for target_document in documents:
+        target_document["metadata"].update(values)
+        sync_document_metadata(
+            target_document, auto_folder=True, auto_file_name=True
+        )
     return values
+
+
+def refresh_batch_property_fields_from_sdat(
+    state: dict[str, Any], changed_field: str
+) -> dict[str, str] | None:
+    """Validate a property edit and synchronize all permanent batch files."""
+    return refresh_property_fields_from_sdat(
+        state,
+        list(state.get("documents", [])),
+        changed_field,
+    )
 
 
 def apply_document_update(
     state: dict[str, Any], document: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
-    metadata = document["metadata"]
+    """Apply edits using the synchronization rules for the active scan mode.
 
-    # These are batch-level values. If the user corrects one file, apply the
-    # correction to every document in the current batch.
-    shared_field_names = (
+    Batch mode intentionally shares property-level metadata across the batch.
+    Mass mode treats every PDF as a separate job, so edits and SDAT results are
+    restricted to the selected document.
+    """
+    metadata = document["metadata"]
+    scan_mode = str(state.get("settings", {}).get("scan_mode", "batch")).lower()
+    mass_mode = scan_mode == "mass"
+
+    property_field_names = (
         "lot",
         "address",
         "tax_map",
@@ -211,31 +230,35 @@ def apply_document_update(
         "section",
         "project_code",
     )
-    shared_updates = {
-        field: payload[field] for field in shared_field_names if field in payload
+    property_updates = {
+        field: payload[field] for field in property_field_names if field in payload
     }
     changed_field = payload.get("changed_field", "")
 
-    if shared_updates:
-        for batch_document in state.get("documents", []):
-            batch_document["metadata"].update(shared_updates)
+    if property_updates:
+        update_targets = (
+            [document]
+            if mass_mode
+            else list(state.get("documents", []))
+        )
+        for target_document in update_targets:
+            target_document["metadata"].update(property_updates)
             sync_document_metadata(
-                batch_document, auto_folder=True, auto_file_name=True
+                target_document, auto_folder=True, auto_file_name=True
             )
 
-    # If the user edits a property identifier, refresh the official SDAT address
-    # once and apply that address to every document in the batch.
     if changed_field in {"tax_map", "parcel", "tax_id", "address", "section"}:
-        refresh_batch_property_fields_from_sdat(state, changed_field)
+        if mass_mode:
+            refresh_property_fields_from_sdat(state, [document], changed_field)
+        else:
+            refresh_batch_property_fields_from_sdat(state, changed_field)
 
-    # Keep non-shared fields document-specific if they are ever posted by older UI/state.
+    # Non-property fields, including document type, always belong only to the
+    # selected document in both scan modes.
     for field in (*REQUIRED_METADATA_FIELDS, *OPTIONAL_METADATA_FIELDS):
-        if field in payload and field not in shared_updates:
+        if field in payload and field not in property_updates:
             metadata[field] = payload[field]
 
-    # Keep the lookup-only behavior synchronized with the editable document type.
-    # Lookup-only documents stay visible in the review queue, but they are not
-    # filed and are removed only after the permanent batch files successfully.
     document["is_lookup_document"] = (
         metadata.get("document_type") == LOOKUP_DOCUMENT_TYPE
     )

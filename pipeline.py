@@ -82,6 +82,7 @@ def choose_batch_metadata_by_vote(
     config: Config,
     default_project_code: str,
     default_document_type: str,
+    resolve_duplicate_document_types: bool = True,
 ) -> tuple[dict[str, str], list[ExtractedMetadata]]:
     votes = extract_document_metadata_votes(
         scanned_documents, config, default_project_code, default_document_type
@@ -94,7 +95,7 @@ def choose_batch_metadata_by_vote(
 
     normal_votes = [votes[i] for i in normal_indexes]
     normal_docs = [scanned_documents[i] for i in normal_indexes]
-    if normal_votes:
+    if normal_votes and resolve_duplicate_document_types:
         fixed = fix_duplicate_document_types_with_visual_classifier(
             normal_votes, normal_docs, config
         )

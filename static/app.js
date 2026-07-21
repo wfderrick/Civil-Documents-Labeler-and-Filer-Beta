@@ -9,6 +9,7 @@ const fields = {
   projectCode: $('projectCode'),
   dpi: $('dpi'),
   ocrDevice: $('ocrDevice'),
+  scanMode: $('scanMode'),
   lot: $('lot'),
   address: $('address'),
   taxMap: $('taxMap'),
@@ -17,18 +18,31 @@ const fields = {
   section: $('section'),
   editProjectCode: $('editProjectCode'),
   editDocumentType: $('editDocumentType'),
-  folderName: $('folderName'),
-  fileName: $('fileName'),
   copyFile: $('copyFile'),
   saveText: $('saveText'),
 };
 
 let browseTargetField = null;
+const folderBrowserElements = {
+  inputFolder: {
+    panel: $('inputFolderBrowser'),
+    currentPath: $('inputBrowseCurrentPath'),
+    list: $('inputBrowseFolderList'),
+    useButton: $('inputUseFolderButton'),
+  },
+  outputFolder: {
+    panel: $('outputFolderBrowser'),
+    currentPath: $('outputBrowseCurrentPath'),
+    list: $('outputBrowseFolderList'),
+    useButton: $('outputUseFolderButton'),
+  },
+};
 
 let scanProgressTimer = null;
 let scanElapsedTimer = null;
 let scanStartedAt = null;
 let renderedProgressCount = 0;
+let liveStateTimer = null;
 
 function resetScanProgressPanel() {
   const panel = $('scanProgressPanel');
@@ -120,38 +134,56 @@ async function stopScanProgressPolling({ failed = false } = {}) {
 }
 
 async function openFolderBrowser(targetFieldId, startPath = '') {
+  const browser = folderBrowserElements[targetFieldId];
+  if (!browser) return;
+
   browseTargetField = targetFieldId;
-  await loadBrowseFolder(startPath || fields[targetFieldId].value);
-  $('folderBrowserModal').classList.remove('hidden');
+  Object.entries(folderBrowserElements).forEach(([fieldId, elements]) => {
+    elements.panel.classList.toggle('hidden', fieldId !== targetFieldId);
+  });
+
+  await loadBrowseFolder(startPath || fields[targetFieldId].value, targetFieldId);
+  browser.panel.classList.remove('hidden');
 }
 
-async function loadBrowseFolder(path) {
-  const data = await requestJson('/api/browse-folders', {
-    method: 'GET',
-    body: JSON.stringify({ path: path}),
-  });
-  
-  $('browseCurrentPath').textContent = data.current;
-  $('browseFolderList').innerHTML = '';
+function closeFolderBrowser(targetFieldId) {
+  const browser = folderBrowserElements[targetFieldId];
+  if (browser) browser.panel.classList.add('hidden');
+  if (browseTargetField === targetFieldId) browseTargetField = null;
+}
+
+async function loadBrowseFolder(path, targetFieldId = browseTargetField) {
+  const browser = folderBrowserElements[targetFieldId];
+  if (!browser) return;
+
+  const browseUrl = `/api/browse-folders?path=${encodeURIComponent(path || '')}`;
+  const data = await requestJson(browseUrl);
+
+  browser.currentPath.textContent = data.current;
+  browser.list.innerHTML = '';
 
   if (data.parent) {
     const up = document.createElement('button');
+    up.type = 'button';
     up.textContent = '..';
-    up.onclick = () => loadBrowseFolder(data.parent);
-    $('browseFolderList').appendChild(up);
+    up.title = 'Go to parent folder';
+    up.onclick = () => loadBrowseFolder(data.parent, targetFieldId);
+    browser.list.appendChild(up);
   }
 
   data.folders.forEach((folder) => {
     const button = document.createElement('button');
+    button.type = 'button';
     button.textContent = folder.name;
-    button.onclick = () => loadBrowseFolder(folder.path);
-    $('browseFolderList').appendChild(button);
+    button.title = folder.path;
+    button.onclick = () => loadBrowseFolder(folder.path, targetFieldId);
+    browser.list.appendChild(button);
   });
 
-  $('useFolderButton').onclick = async () => {
-    fields[browseTargetField].value = data.current;
-    $('folderBrowserModal').classList.add('hidden');
-    if (browseTargetField === 'outputFolder' && state.documents.length) {
+  browser.useButton.onclick = async () => {
+    fields[targetFieldId].value = data.current;
+    closeFolderBrowser(targetFieldId);
+    if (targetFieldId === 'outputFolder' && state.documents.length) {
       try {
         await saveOutputFolder();
       } catch (error) {
@@ -279,9 +311,15 @@ function batchWarnings() {
     if (missing.length) warnings.push(`${document.source_name}: missing ${missing.join(', ')}`);
   });
 
-  typeGroups.forEach((files, type) => {
-    if (files.length > 1) warnings.unshift(`Duplicate document type “${type}”: ${files.join(', ')}`);
-  });
+  // Duplicate document types are meaningful only when the PDFs form one
+  // related batch. In mass mode every PDF is an independent job, so only
+  // per-document missing-information warnings should be shown.
+  const scanMode = String(state.settings?.scan_mode || 'batch').toLowerCase();
+  if (scanMode !== 'mass') {
+    typeGroups.forEach((files, type) => {
+      if (files.length > 1) warnings.unshift(`Duplicate document type “${type}”: ${files.join(', ')}`);
+    });
+  }
   return warnings;
 }
 
@@ -308,7 +346,11 @@ function renderBatchWarnings() {
     banner.innerHTML = '';
     return;
   }
-  banner.innerHTML = `<strong>Batch needs attention</strong><ul>${warnings.map((item) => `<li>${item}</li>`).join('')}</ul>`;
+  const visibleWarnings = warnings.slice(0, 3);
+  const warningSummary = warnings.length > visibleWarnings.length
+    ? `Showing ${visibleWarnings.length} of ${warnings.length} issues`
+    : `${warnings.length} issue${warnings.length === 1 ? '' : 's'}`;
+  banner.innerHTML = `<div class="batch-warning-heading"><strong>Batch needs attention</strong><span>${warningSummary}</span></div><ul>${visibleWarnings.map((item) => `<li>${item}</li>`).join('')}</ul>`;
   banner.classList.remove('hidden');
 }
 
@@ -331,23 +373,28 @@ addEventListener() function. Finally the buttons created in the forEach loop are
 added to the list of children which belong to the <div> with id=documentList 
 with the .appendChild() function. */
 function renderList() {
-  if (state.selectedId){
-    const list = $('documentList');
+  const list = $('documentList');
   list.innerHTML = '';
-  const visibleDocuments = state.documents;
+  const visibleDocuments = state.documents || [];
   $('queueCount').textContent = String(visibleDocuments.length);
 
   visibleDocuments.forEach((item) => {
     const button = document.createElement('button');
     button.className = `doc-row ${item.id === state.selectedId ? 'active' : ''}`;
-    button.innerHTML = `<strong>${item.source_name}</strong><span>${statusLabel(item)}</span>`;
+    button.innerHTML = `<strong>${item.source_name}</strong>`;
     button.addEventListener('click', () => selectDocument(item.id));
     list.appendChild(button);
   });
-  }else{
+
+  if (!visibleDocuments.length) {
     $('emptyState').classList.remove('hidden');
+    $('reviewPane').classList.add('hidden');
+    const pdfFrame = $('pdfFrame');
+    pdfFrame.dataset.documentId = '';
+    pdfFrame.src = '/documents/missing/pdf';
   }
 }
+
 
 /**The renderSelectedDocument() function makes the document and review pane for 
 that document given by the document parameter, visible to the user. It begins by
@@ -364,7 +411,18 @@ metadata.*/
 function renderSelectedDocument(document) {
   $('emptyState').classList.add('hidden');
   $('reviewPane').classList.remove('hidden');
-  $('pdfFrame').src = `/documents/${document.id}/pdf`;
+  const pdfFrame = $('pdfFrame');
+  const pdfUrl = `/documents/${document.id}/pdf`;
+
+  // Live mass-scan polling refreshes the application state several times per
+  // second. Reassigning an iframe's src, even to the same URL, can make the
+  // browser reload the PDF and reset the user's page/zoom position. Only load
+  // the PDF when the selected document actually changes.
+  if (pdfFrame.dataset.documentId !== String(document.id)) {
+    pdfFrame.dataset.documentId = String(document.id);
+    pdfFrame.src = pdfUrl;
+  }
+
   $('documentTitle').textContent = document.source_name;
   $('documentStatus').textContent = statusLabel(document);
 
@@ -376,9 +434,6 @@ function renderSelectedDocument(document) {
   fields.section.value = document.metadata.section || '';
   fields.editProjectCode.value = document.metadata.project_code || '';
   if (fields.editDocumentType) fields.editDocumentType.value = document.metadata.document_type || 'Field Notes';
-  fields.folderName.value = document.folder_name || '';
-  fields.fileName.value = document.file_name || '';
-  $('ocrText').textContent = document.ocr_text || '';
   $('fileButton').disabled = document.status === 'filed' || document.is_lookup_document;
   $('fileButton').title = document.is_lookup_document
     ? 'Lookup-only documents are removed after the permanent batch is filed.'
@@ -415,7 +470,7 @@ function selectDocument(id) {
  * property, displays the document as a pdf and shows the review panel. 
  * Otherwise page is rendered with no documents.
 */
-function applyState(data) {
+function applyState(data, options = {}) {
   state.documents = data.documents || [];
   state.settings = data.settings || {};
 
@@ -425,13 +480,24 @@ function applyState(data) {
   fields.projectCode.value = state.settings.project_code_override || state.settings.project_code || '';
   fields.dpi.value = state.settings.dpi || 300;
   if (fields.ocrDevice) fields.ocrDevice.value = state.settings.ocr_device || 'auto';
+  if (fields.scanMode) fields.scanMode.value = state.settings.scan_mode || 'batch';
 
   if (!state.documents.some((document) => document.id === state.selectedId)) {
     state.selectedId = state.documents[0]?.id || null;
   }
 
   renderBatchWarnings();
-  if (state.selectedId) 
+
+  // During a live mass scan, state polling should refresh the queue and warning
+  // summary without replacing values the reviewer is currently typing. The
+  // review form is refreshed only when the selected document changes or when a
+  // deliberate save/select action calls applyState without preserveReview.
+  if (options.preserveReview && state.selectedId) {
+    renderList();
+    return;
+  }
+
+  if (state.selectedId)
     selectDocument(state.selectedId);
   else
     renderList();
@@ -460,6 +526,7 @@ function scanPayload() {
     project_code: fields.projectCode.value,
     dpi: Number(fields.dpi.value),
     ocr_device: fields.ocrDevice ? fields.ocrDevice.value : 'auto',
+    scan_mode: fields.scanMode ? fields.scanMode.value : 'batch',
   };
 }
 
@@ -473,8 +540,8 @@ function updatePayload(autoFolder = false, autoFileName = false, changedField = 
     section: fields.section.value,
     project_code: fields.editProjectCode.value,
     document_type: fields.editDocumentType ? fields.editDocumentType.value : '',
-    folder_name: fields.folderName.value,
-    file_name: fields.fileName.value,
+    folder_name: selectedDocument()?.folder_name || '',
+    file_name: selectedDocument()?.file_name || '',
     auto_folder: autoFolder,
     auto_file_name: autoFileName,
     changed_field: changedField,
@@ -496,24 +563,52 @@ async function loadState() {
 }
 
 /**The scan() function */
+async function pollLiveScanState() {
+  try {
+    const data = await requestJson('/api/state');
+    const previousCount = state.documents.length;
+    applyState(data, { preserveReview: true });
+    if (state.documents.length > previousCount) {
+      showToast(`${state.documents.length} document${state.documents.length === 1 ? '' : 's'} ready for review.`);
+    }
+  } catch (_error) {
+    // The main scan request reports actionable errors. A temporary state read
+    // failure should not stop OCR or the progress timer.
+  }
+}
+
+function startLiveStatePolling() {
+  clearInterval(liveStateTimer);
+  pollLiveScanState();
+  liveStateTimer = setInterval(pollLiveScanState, 500);
+}
+
+function stopLiveStatePolling() {
+  clearInterval(liveStateTimer);
+  liveStateTimer = null;
+}
+
 async function scan() {
   const button = $('scanButton');
+  const payload = scanPayload();
   setButtonLoading(button, true, 'Scanning...', 'Scan PDFs');
   startScanProgressPolling();
+  if (payload.scan_mode === 'mass') startLiveStatePolling();
   let scanFailed = false;
 
   try {
     const data = await requestJson('/api/scan', {
       method: 'POST',
-      body: JSON.stringify(scanPayload()),
+      body: JSON.stringify(payload),
     });
-    state.selectedId = data.documents?.[0]?.id || null;
+    state.selectedId = state.selectedId || data.documents?.[0]?.id || null;
     applyState(data);
     showToast(`Scanned ${state.documents.length} PDF${state.documents.length === 1 ? '' : 's'}.`);
   } catch (error) {
     scanFailed = true;
     showToast(error.message, true);
   } finally {
+    stopLiveStatePolling();
     await stopScanProgressPolling({ failed: scanFailed });
     setButtonLoading(button, false, 'Scanning...', 'Scan PDFs');
   }
@@ -546,17 +641,19 @@ async function fileCurrent() {
     const filed = await requestJson(`/api/documents/${document.id}/file`, {
       method: 'POST',
       body: JSON.stringify({
-        folder_name: fields.folderName.value,
-        file_name: fields.fileName.value,
+        folder_name: document.folder_name || '',
+        file_name: document.file_name || '',
         output_folder: fields.outputFolder.value,
         copy: fields.copyFile.checked,
         save_text: fields.saveText.checked,
       }),
     });
 
-    replaceDocument(filed);
-    selectDocument(filed.id);
-    showToast(`Filed to ${filed.filed_path}`);
+    // The server returns the active review queue with the filed document
+    // removed. applyState keeps the current selection when possible and selects
+    // the next available document when the filed document was active.
+    applyState(filed);
+    showToast(`Filed to ${filed.filed?.filed_path || 'the output folder'}`);
   } catch (error) {
     showToast(error.message, true);
   }
@@ -604,7 +701,6 @@ function registerAutoSave(ids, autoFolder, autoFileName) {
 }
 
 registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'section', 'editProjectCode', 'editDocumentType'], true, true);
-registerAutoSave(['folderName', 'fileName'], false, false);
 
 fields.outputFolder.addEventListener('change', () => {
   if (!state.documents.length) return;

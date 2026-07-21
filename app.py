@@ -19,7 +19,7 @@ from document_service import (
     sync_document_metadata,
 )
 from metadata_extraction import load_config
-from ocr_service import make_ocr, ocr_pdf_batch
+from ocr_service import get_cached_ocr, ocr_pdf_batch
 from pipeline import (
     LOOKUP_DOCUMENT_TYPE,
     choose_batch_metadata_by_vote,
@@ -38,11 +38,6 @@ from state_store import (
 )
 from tracker import append_batch_tracker
 
-try:
-    from paddleocr import PaddleOCR
-except Exception:  # pragma: no cover - shown in the UI at runtime
-    PaddleOCR = None
-
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / ".review_state" / "documents.json"
@@ -54,8 +49,6 @@ REQUIRED_METADATA_FIELDS = ("lot", "address", "project_code", "document_type")
 OPTIONAL_METADATA_FIELDS = ("tax_map", "parcel", "tax_id", "section")
 
 app = Flask("ocr_pipeline_gpu_optimized")
-ocr_engine = None
-ocr_language = None
 
 _SCAN_PROGRESS_LOCK = threading.Lock()
 _SCAN_PROGRESS: dict[str, Any] = {
@@ -77,24 +70,6 @@ def api_error(message: str, status_code: int = 500):
     an error message as a json and status code."""
     return jsonify({"error": message}), status_code
 
-
-def get_ocr(lang: str, ocr_device: str = "auto", gpu_device_id: int = 0):
-    """The get_ocr() function returns a pointer to a PaddleOCR object. If there
-    isn't already a selected ocr_engine a new one is created using the
-    make_ocr() fucntion."""
-    global ocr_engine, ocr_language
-    cache_key = f"{lang}|{ocr_device}|{gpu_device_id}"
-    if PaddleOCR is None:
-        raise RuntimeError(
-            "PaddleOCR is not installed. Run: python -m pip install -r"
-            " requirements.txt"
-        )
-    if ocr_engine is None or ocr_language != cache_key:
-        ocr_engine = make_ocr(
-            lang=lang, ocr_device=ocr_device, gpu_device_id=gpu_device_id
-        )
-        ocr_language = cache_key
-    return ocr_engine
 
 
 def json_payload() -> dict[str, Any]:
@@ -148,6 +123,7 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "parallel_ocr": False,
         "ocr_workers": 1,
         "ocr_threads_per_worker": 4,
+        "scan_mode": (payload.get("scan_mode") or "batch").strip().lower(),
     }
 
 
@@ -258,6 +234,99 @@ def scan_batch(
     return documents
 
 
+
+def scan_mass(
+    input_folder: Path,
+    ocr,
+    config: dict[str, Any],
+    settings: dict[str, Any],
+    progress_callback=None,
+    document_ready_callback=None,
+) -> list[dict[str, Any]]:
+    """Scan PDFs independently and publish each completed document immediately.
+
+    Unlike batch mode, no metadata voting or sharing occurs between files. Each
+    PDF is OCRed, classified, enriched, named, and persisted before the next PDF
+    begins. This allows the browser to review completed files while the remaining
+    files continue through OCR.
+    """
+    pdfs = sorted(
+        path
+        for path in input_folder.iterdir()
+        if path.is_file() and path.suffix.lower() == ".pdf"
+    )
+    if not pdfs:
+        return []
+
+    report = progress_callback or (lambda _message: None)
+    publish = document_ready_callback or (lambda _document: None)
+    documents: list[dict[str, Any]] = []
+    total = len(pdfs)
+    report(f"Found {total} PDF{'s' if total != 1 else ''} to mass scan.")
+
+    for number, pdf_path in enumerate(pdfs, start=1):
+        report(f"Mass scan document {number} of {total}: {pdf_path.name}")
+        scanned_document = ocr_pdf_batch(
+            [pdf_path],
+            dpi=settings["dpi"],
+            lang=settings["lang"],
+            workers=1,
+            threads_per_worker=int(settings.get("ocr_threads_per_worker") or 4),
+            existing_ocr=ocr,
+            ocr_device=settings.get("ocr_device", "auto"),
+            gpu_device_id=int(settings.get("gpu_device_id") or 0),
+            progress_callback=report,
+        )[0]
+
+        shared_metadata, metadata_votes = choose_batch_metadata_by_vote(
+            scanned_documents=[scanned_document],
+            config=config,
+            default_project_code=settings["project_code"],
+            default_document_type=settings["document_type"],
+            resolve_duplicate_document_types=False,
+        )
+        metadata_vote = metadata_votes[0]
+        is_lookup = metadata_vote.document_type == LOOKUP_DOCUMENT_TYPE
+        final_metadata = (
+            metadata_vote
+            if is_lookup
+            else merge_batch_metadata(
+                document_text=scanned_document["ocr_text"],
+                config=config,
+                default_project_code=settings["project_code"],
+                default_document_type=settings["document_type"],
+                shared_metadata=shared_metadata,
+                document_metadata=metadata_vote,
+            )
+        )
+        document = sync_document_metadata(
+            {
+                "id": uuid.uuid4().hex,
+                "source_path": scanned_document["source_path"],
+                "source_name": scanned_document["source_name"],
+                "ocr_text": scanned_document["ocr_text"],
+                "ocr_pages": scanned_document.get("ocr_pages", []),
+                "metadata": asdict(final_metadata),
+                "is_lookup_document": is_lookup,
+                "filed_path": "",
+            }
+        )
+        if settings.get("section"):
+            document["metadata"]["section"] = settings["section"]
+
+        if not is_lookup:
+            document["folder_name"] = suggested_folder(document["metadata"])
+            document["file_name"] = suggested_filename(
+                document["metadata"], document["source_name"]
+            )
+            sync_document_metadata(document)
+
+        documents.append(document)
+        publish(document)
+        report(f"Ready for review: {pdf_path.name}")
+
+    return documents
+
 def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     """The _folder_project_and_section() function returns the project code and
     section taken from the output_folder parameter. It splits the parameter on
@@ -349,8 +418,10 @@ def api_browse_folders():
     the child folders are added to a list called folders with their name and
     path. Finally jsonify is returned after being called on the dictonary with
     the previously specified folders."""
-    path = json_payload()["path"]
-    current = Path(path).expanduser().resolve()
+    # Folder browsing is a read-only GET operation. Read the path from the
+    # query string; browsers do not reliably support request bodies on GET.
+    path = request.args.get("path", "")
+    current = Path(path or ".").expanduser().resolve()
 
     if not current.exists() or not current.is_dir():
         return api_error(f"Folder not found: {current}", 400)
@@ -479,44 +550,74 @@ def api_scan():
         )
         settings["project_code_override"] = ""
 
-    # If the gpu not being used, parallel OCR is disabled, and there is only one
-    # worker use_single_engine is False and the ocr object won't be created. If
-    # the use_single_engine variable is True the get_ocr
-    use_single_engine = (
-        str(settings.get("ocr_device", "auto")).lower() == "gpu"
+    scan_mode = settings.get("scan_mode", "batch")
+    if scan_mode not in {"batch", "mass"}:
+        scan_mode = "batch"
+        settings["scan_mode"] = scan_mode
+
+    # Sequential scans reuse a process-lifetime OCR engine from ocr_service.
+    # Parallel CPU batch workers still initialize one private engine per process.
+    use_main_process_engine = (
+        scan_mode == "mass"
+        or str(settings.get("ocr_device", "auto")).lower() == "gpu"
         or not settings.get("parallel_ocr", False)
         or int(settings.get("ocr_workers", 1)) <= 1
     )
     ocr = (
-        get_ocr(
-            settings["lang"],
-            settings.get("ocr_device", "auto"),
-            int(settings.get("gpu_device_id") or 0),
+        get_cached_ocr(
+            lang=settings["lang"],
+            cpu_threads=int(settings.get("ocr_threads_per_worker") or 4),
+            ocr_device=settings.get("ocr_device", "auto"),
+            gpu_device_id=int(settings.get("gpu_device_id") or 0),
         )
-        if use_single_engine
+        if use_main_process_engine
         else None
     )
 
-    state = {
-        "settings": settings,
-        "documents": scan_batch(
+    state = {"settings": settings, "documents": []}
+    if scan_mode == "mass":
+        # Clear the previous queue immediately. Atomic state writes let the
+        # browser safely poll this file while documents are appended.
+        write_state(state)
+
+        def publish_document(document: dict[str, Any]) -> None:
+            # Read the latest persisted state before appending. Review edits may
+            # be saved from another Flask request while OCR continues; writing
+            # the scan request's older in-memory state here would erase them.
+            latest_state = read_state()
+            latest_state["settings"] = settings
+            latest_documents = latest_state.setdefault("documents", [])
+            if not any(item.get("id") == document.get("id") for item in latest_documents):
+                latest_documents.append(document)
+            write_state(latest_state)
+            state["documents"] = latest_documents
+
+        scan_mass(
             input_folder,
             ocr,
             config,
             settings,
             progress_callback=add_scan_progress,
-        ),
-    }
-    if settings.get("section"):
-        for document in state["documents"]:
-            document["metadata"]["section"] = settings["section"]
-
-    write_state(state)
+            document_ready_callback=publish_document,
+        )
+    else:
+        state["documents"] = scan_batch(
+            input_folder,
+            ocr,
+            config,
+            settings,
+            progress_callback=add_scan_progress,
+        )
+        if settings.get("section"):
+            for document in state["documents"]:
+                document["metadata"]["section"] = settings["section"]
+        write_state(state)
+    final_state = read_state() if scan_mode == "mass" else state
     finish_scan_progress(
-        message=f"Scan complete. {len(state['documents'])} document(s)\
+        message=f"Scan complete. {len(final_state['documents'])} document(s)\
           ready for review."
     )
-    return jsonify(state)
+    return jsonify(final_state)
 
 
 @app.patch("/api/documents/<document_id>")
@@ -576,8 +677,24 @@ def api_file_document(document_id: str):
             "File not located in specified input folder anymore.", 400
         )
 
-    write_state(state)
-    return jsonify(filed)
+    # A successfully filed document no longer needs review. Re-read the latest
+    # state so documents completed by an active mass scan are preserved, remove
+    # only the filed document, and persist the shortened review queue.
+    latest_state = read_state()
+    latest_state.setdefault("settings", {}).update(state.get("settings", {}))
+    latest_state["documents"] = [
+        item
+        for item in latest_state.get("documents", [])
+        if item.get("id") != document_id
+    ]
+    write_state(latest_state)
+    return jsonify(
+        {
+            "settings": latest_state.get("settings", {}),
+            "documents": latest_state.get("documents", []),
+            "filed": filed,
+        }
+    )
 
 
 @app.post("/api/file-all")

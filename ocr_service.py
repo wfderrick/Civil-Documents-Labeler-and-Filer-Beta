@@ -1,5 +1,6 @@
 from __future__ import annotations
 import tempfile
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -343,6 +344,44 @@ def make_ocr(
     if last_error:
         raise last_error
     return PaddleOCR(**base_kwargs)
+
+
+_OCR_ENGINE_CACHE: dict[tuple[str, str, int, int], PaddleOCR] = {}
+_OCR_ENGINE_CACHE_LOCK = threading.Lock()
+
+
+def get_cached_ocr(
+    lang: str = "en",
+    cpu_threads: int | None = None,
+    ocr_device: str = "auto",
+    gpu_device_id: int = 0,
+) -> PaddleOCR:
+    """Return a process-lifetime OCR engine for one exact configuration.
+
+    PaddleOCR model construction is expensive.  Keeping the engine in this
+    module-level cache means a later ``POST /api/scan`` can reuse the model
+    loaded by an earlier request instead of loading the same models again.
+    Worker processes still create their own engines because process memory is
+    isolated and Paddle predictors should not be passed between processes.
+    """
+    resolved_device = resolve_ocr_device(ocr_device, gpu_device_id)
+    key = (
+        str(lang or "en"),
+        resolved_device,
+        int(gpu_device_id or 0),
+        int(cpu_threads or 0),
+    )
+    with _OCR_ENGINE_CACHE_LOCK:
+        engine = _OCR_ENGINE_CACHE.get(key)
+        if engine is None:
+            engine = make_ocr(
+                lang=key[0],
+                cpu_threads=(key[3] or None),
+                ocr_device=resolved_device,
+                gpu_device_id=key[2],
+            )
+            _OCR_ENGINE_CACHE[key] = engine
+        return engine
 
 
 def _init_ocr_worker(

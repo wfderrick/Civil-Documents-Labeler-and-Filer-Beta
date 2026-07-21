@@ -1,5 +1,7 @@
 from __future__ import annotations
 import json
+import os
+import threading
 from pathlib import Path
 from typing import Any
 from metadata_extraction import load_config
@@ -8,6 +10,7 @@ APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / ".review_state" / "documents.json"
 DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
 DEFAULT_STATE: dict[str, Any] = {"settings": {}, "documents": []}
+_STATE_FILE_LOCK = threading.RLock()
 
 
 def read_state() -> dict[str, Any]:
@@ -16,10 +19,11 @@ def read_state() -> dict[str, Any]:
     .review_state folder in the project directory. If that file has not
     been created yet it returns a default dictionary with empty settings
     and documents."""
-    if not STATE_FILE.exists():
-        return dict(DEFAULT_STATE)
-    with STATE_FILE.open("r", encoding="utf-8") as state_file:
-        return json.load(state_file)
+    with _STATE_FILE_LOCK:
+        if not STATE_FILE.exists():
+            return dict(DEFAULT_STATE)
+        with STATE_FILE.open("r", encoding="utf-8") as state_file:
+            return json.load(state_file)
 
 
 def write_state(state: dict[str, Any]) -> None:
@@ -28,10 +32,14 @@ def write_state(state: dict[str, Any]) -> None:
     exists for the STATE_FILE. Then it opens the state file to either be created
     if it doesn't exist or overwritten if it does. Finally dump() writes itself
     onto the file."""
-    print(str(STATE_FILE.parent))
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with STATE_FILE.open("w", encoding="utf-8") as state_file:
-        json.dump(state, state_file, indent=2)
+    temporary_file = STATE_FILE.with_suffix(".json.tmp")
+    with _STATE_FILE_LOCK:
+        with temporary_file.open("w", encoding="utf-8") as state_file:
+            json.dump(state, state_file, indent=2)
+            state_file.flush()
+            os.fsync(state_file.fileno())
+        temporary_file.replace(STATE_FILE)
 
 
 def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
