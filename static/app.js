@@ -126,8 +126,11 @@ async function openFolderBrowser(targetFieldId, startPath = '') {
 }
 
 async function loadBrowseFolder(path) {
-  const data = await requestJson(`/api/browse-folders?path=${encodeURIComponent(path || '')}`);
-
+  const data = await requestJson('/api/browse-folders', {
+    method: 'GET',
+    body: JSON.stringify({ path: path}),
+  });
+  
   $('browseCurrentPath').textContent = data.current;
   $('browseFolderList').innerHTML = '';
 

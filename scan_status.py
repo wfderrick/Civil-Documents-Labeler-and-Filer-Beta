@@ -69,6 +69,6 @@ def scan_progress_snapshot() -> dict[str, Any]:
             "active": bool(_SCAN_PROGRESS.get("active")),
             "finished": bool(_SCAN_PROGRESS.get("finished")),
             "failed": bool(_SCAN_PROGRESS.get("failed")),
-            "elapsed": round(elapsed, 2),
+            "elapsed": round(elapsed, 3),
             "messages": list(_SCAN_PROGRESS.get("messages", [])),
         }

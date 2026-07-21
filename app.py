@@ -10,17 +10,6 @@ from typing import Any
 
 from flask import Flask, jsonify, render_template, request, send_file
 
-from ocr_service import make_ocr, ocr_pdf_batch
-
-from metadata_extraction import load_config
-
-from pipeline import (
-    LOOKUP_DOCUMENT_TYPE,
-    choose_batch_metadata_by_vote,
-    merge_batch_metadata,
-    safe_path_part,
-)
-
 from document_service import (
     apply_document_update,
     file_document_to_output,
@@ -28,6 +17,13 @@ from document_service import (
     suggested_filename,
     suggested_folder,
     sync_document_metadata,
+)
+from metadata_extraction import load_config
+from ocr_service import make_ocr, ocr_pdf_batch
+from pipeline import (
+    LOOKUP_DOCUMENT_TYPE,
+    choose_batch_metadata_by_vote,
+    merge_batch_metadata,
 )
 from scan_status import (
     add_scan_progress,
@@ -37,8 +33,8 @@ from scan_status import (
 )
 from state_store import (
     read_state,
-    write_state,
     update_output_folder_setting,
+    write_state,
 )
 from tracker import append_batch_tracker
 
@@ -71,7 +67,7 @@ _SCAN_PROGRESS: dict[str, Any] = {
 }
 
 
-"""---------------------------------------------------------------------------------------"""
+"""--------------------------------------------------------------------------"""
 
 """FUNCTION DEFINITION SECTION"""
 
@@ -90,7 +86,8 @@ def get_ocr(lang: str, ocr_device: str = "auto", gpu_device_id: int = 0):
     cache_key = f"{lang}|{ocr_device}|{gpu_device_id}"
     if PaddleOCR is None:
         raise RuntimeError(
-            "PaddleOCR is not installed. Run: python -m pip install -r requirements.txt"
+            "PaddleOCR is not installed. Run: python -m pip install -r"
+            " requirements.txt"
         )
     if ocr_engine is None or ocr_language != cache_key:
         ocr_engine = make_ocr(
@@ -138,7 +135,9 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "output_folder": (
             str(resolve_folder(output_folder_raw)) if output_folder_raw else ""
         ),
-        "config_path": (payload.get("config_path") or str(DEFAULT_CONFIG_PATH)).strip(),
+        "config_path": (
+            payload.get("config_path") or str(DEFAULT_CONFIG_PATH)
+        ).strip(),
         "project_code": (payload.get("project_code") or "").strip(),
         "project_code_override": (payload.get("project_code") or "").strip(),
         "document_type": "Field Notes",
@@ -176,13 +175,15 @@ def scan_batch(
     ocr_device = settings.get("ocr_device", "auto")
     gpu_device_id = int(settings.get("gpu_device_id") or 0)
 
-    # A single GPU should run one OCR engine. Parallel worker processes are kept
+    # A single GPU should run one OCR engine. Parallel worker processes afre kept
     # for CPU fallback, not for one-GPU OCR.
     if str(ocr_device).lower() == "gpu":
         workers = 1
     else:
         workers = (
-            settings.get("ocr_workers", 1) if settings.get("parallel_ocr", False) else 1
+            settings.get("ocr_workers", 1)
+            if settings.get("parallel_ocr", False)
+            else 1
         )
         workers = max(1, min(int(workers or 1), len(pdfs)))
     threads_per_worker = int(settings.get("ocr_threads_per_worker") or 4)
@@ -241,7 +242,9 @@ def scan_batch(
         )
     report("Finished preparing documents for review.")
     normal_documents = [
-        document for document in documents if not document.get("is_lookup_document")
+        document
+        for document in documents
+        if not document.get("is_lookup_document")
     ]
     if normal_documents:
         shared_folder = suggested_folder(normal_documents[0]["metadata"])
@@ -272,19 +275,29 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
         return project_code.strip(), section.strip()
 
 
-"""-----------------------------------------------------------------------------------------------"""
+"""--------------------------------------------------------------------------"""
 
 """FLASK APP COMMUNICATION SECTION"""
 
 
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
+    """The handle_unexpected_error() function deals with unhandled exceptions
+    which happen while processiing a request. If the fails happens when a POST
+    request to the url /api/scan the progess indicator is updated to the failed
+    state and the error message is displayed within the scan progress window.
+    If any of the requests which start with /api/ in the path throw an error a
+    Response object is returned containing the error as JSON and a status code
+    because the requests with api in them expect a JSON response. The exception
+    is also logged so it has the stack trace, exception type, file name, line
+    number, and timestamp which helps with debugging. For other errors they are
+    reraised and a 500 error code is displayed in the browser."""
     if request.path == "/api/scan":
         finish_scan_progress(failed=True, message=f"Scan failed: {error}")
     if request.path.startswith("/api/"):
         app.logger.exception("API request failed")
         return api_error(str(error) or "Unexpected server error")
-    raise error
+    raise
 
 
 @app.get("/")
@@ -302,6 +315,9 @@ def index():
 
 @app.get("/favicon.ico")
 def favicon():
+    """The favicon() function returns a status code meaning success. This
+    function prevents the app from saying there is an error if it requests
+    /favicon.ico and there is nothing."""
     return "", 204
 
 
@@ -316,15 +332,25 @@ def api_state():
     json pulled from documents.json."""
     state = read_state()
     state["documents"] = [
-        sync_document_metadata(document) for document in state.get("documents", [])
+        sync_document_metadata(document)
+        for document in state.get("documents", [])
     ]
     return jsonify(state)
 
 
 @app.get("/api/browse-folders")
 def api_browse_folders():
-    requested = request.args.get("path") or str(Path.home())
-    current = Path(requested).expanduser().resolve()
+    """The api_browse_folders() function returns a Response object with JSON
+    containing the current folder, parent folder, and child folders. It first
+    uses the json_payload() function to extract the path from the body of the
+    GET request. The path is then converted to a Path object. If the path
+    doesn't actually exist or it's not a directory the api_error() function
+    returns a response object with the path and 400 error code. Otherwise all of
+    the child folders are added to a list called folders with their name and
+    path. Finally jsonify is returned after being called on the dictonary with
+    the previously specified folders."""
+    path = json_payload()["path"]
+    current = Path(path).expanduser().resolve()
 
     if not current.exists() or not current.is_dir():
         return api_error(f"Folder not found: {current}", 400)
@@ -345,6 +371,16 @@ def api_browse_folders():
 
 @app.patch("/api/settings/output-folder")
 def api_update_output_folder():
+    """The api_update_output_folder() updates documents.json with a new output
+    folder, and returns a Response object with output folder and settings in it.
+    It begins by reading the current state via the read_state() function. It
+    then tries to set the output_folder variable with the
+    update_output_folder_setting() function which update the state variable and
+    returns a Path object with the output folder. If that has an error the
+    function returns a Response object with the error message and 400 error
+    code. If it succeeds it updates documents.json with the write_state()
+    function. Lastly it returns a Response object via the jsonify() function
+    with output folder and settings."""
     state = read_state()
     try:
         output_folder = update_output_folder_setting(
@@ -364,18 +400,32 @@ def api_update_output_folder():
 
 @app.get("/api/scan-progress")
 def api_scan_progress():
+    """The api_scan_progress() function returns a Response object containing the
+    current total time, active scans, finished scans, failed scans, and messages
+    in the _SCAN_PROGRESS dictionary."""
     return jsonify(scan_progress_snapshot())
 
 
 @app.post("/api/scan")
 def api_scan():
-    """Scan the selected batch while publishing progress to the browser."""
+    """The api_scan() function controls the scanning process for the pdf
+    documents currently in the input folder, eventually returning a Response
+    object containing the current state. Since this is a long function further
+    details can be found in comments within the function. Located in: app.py"""
+
+    # Prepares for the scanning process by gathering settings, input folder,
+    # output folder, resetting the scan progress window and starting a new scan
+    # progress window.
     reset_scan_progress()
     add_scan_progress("Starting scan request.")
     settings = scan_settings(json_payload())
     input_folder = Path(settings["input_folder"])
     output_folder = Path(settings["output_folder"])
 
+    # Ensures that the given input and output folders are in settings and that
+    # input is a directory. If not a Response object is returned with an error
+    # message and the 400 error code. If the given output folder doesn't exist
+    # yet one is created.
     if not settings["input_folder"]:
         finish_scan_progress(
             failed=True, message="Scan failed: Input folder is required."
@@ -394,21 +444,44 @@ def api_scan():
         return api_error(f"Input folder not found: {input_folder}", 400)
 
     output_folder.mkdir(parents=True, exist_ok=True)
+
+    # Gets the path to the config file if one is given.
     config_path = (
-        Path(settings["config_path"]).resolve() if settings["config_path"] else None
+        Path(settings["config_path"]).resolve()
+        if settings["config_path"]
+        else None
     )
-    config = load_config(config_path if config_path and config_path.exists() else None)
-    detected_project_code, detected_section = _folder_project_and_section(output_folder)
+
+    # If there is a config file it is loaded into a python dictionary.
+    config = load_config(
+        config_path if config_path and config_path.exists() else None
+    )
+
+    # Gets the project code and section from the output folder name. Then updates
+    # the section in settins to match the detected section.
+    detected_project_code, detected_section = _folder_project_and_section(
+        output_folder
+    )
     settings["section"] = detected_section
+
+    # Attempts to get a manually entered project code from the current settings.
+    # If there is one the letters in it are converted to uppercase and the
+    # override for project code is set to match the manual project code. If there
+    # isn't a manual project code in settings the detected project code is
+    # entered into settings and the override it set to an empty string.
     manual_project_code = (settings.get("project_code") or "").strip()
     if manual_project_code:
-        settings["project_code"] = safe_path_part(
-            manual_project_code.upper(), "Project"
-        )
+        settings["project_code"] = manual_project_code.upper()
         settings["project_code_override"] = settings["project_code"]
     else:
-        settings["project_code"] = safe_path_part(detected_project_code, "Project")
+        settings["project_code"] = (
+            (detected_project_code or "").upper().strip()
+        )
         settings["project_code_override"] = ""
+
+    # If the gpu not being used, parallel OCR is disabled, and there is only one
+    # worker use_single_engine is False and the ocr object won't be created. If
+    # the use_single_engine variable is True the get_ocr
     use_single_engine = (
         str(settings.get("ocr_device", "auto")).lower() == "gpu"
         or not settings.get("parallel_ocr", False)
@@ -440,7 +513,8 @@ def api_scan():
 
     write_state(state)
     finish_scan_progress(
-        message=f"Scan complete. {len(state['documents'])} document(s) ready for review."
+        message=f"Scan complete. {len(state['documents'])} document(s)\
+          ready for review."
     )
     return jsonify(state)
 
@@ -458,7 +532,8 @@ def api_update_document(document_id: str):
         {
             "settings": state.get("settings", {}),
             "documents": [
-                sync_document_metadata(doc) for doc in state.get("documents", [])
+                sync_document_metadata(doc)
+                for doc in state.get("documents", [])
             ],
             "updated": updated,
         }
@@ -497,7 +572,9 @@ def api_file_document(document_id: str):
             file_name=payload.get("file_name"),
         )
     except FileNotFoundError:
-        return api_error("File not located in specified input folder anymore.", 400)
+        return api_error(
+            "File not located in specified input folder anymore.", 400
+        )
 
     write_state(state)
     return jsonify(filed)
@@ -516,8 +593,12 @@ def api_file_all_documents():
     except (OSError, ValueError) as error:
         return api_error(str(error), 400)
     documents = state.get("documents", [])
-    normal_documents = [doc for doc in documents if not doc.get("is_lookup_document")]
-    lookup_documents = [doc for doc in documents if doc.get("is_lookup_document")]
+    normal_documents = [
+        doc for doc in documents if not doc.get("is_lookup_document")
+    ]
+    lookup_documents = [
+        doc for doc in documents if doc.get("is_lookup_document")
+    ]
     if not normal_documents:
         return api_error("No permanent documents to file.", 400)
     shared_folder = normal_documents[0].get("folder_name") or suggested_folder(
@@ -542,11 +623,13 @@ def api_file_all_documents():
         append_batch_tracker(normal_documents, output_folder, filed_documents)
     except OSError as error:
         return api_error(
-            f"Documents were filed, but the tracker could not be updated: {error}",
+            f"Documents were filed, but the tracker could not be updated: \
+            {error}",
             500,
         )
 
-    # Delete lookup-only source records only after every permanent document succeeds.
+    # Delete lookup-only source records only after every permanent document
+    # succeeds.
     for lookup in lookup_documents:
         source = Path(lookup.get("source_path", ""))
         if source.exists():
@@ -594,7 +677,15 @@ def document_pdf(document_id: str):
         )
 
 
-"""Where it all begins. app is the Flask object created in the imports and constants section. This object connects all of the files together. The run function runs app.py on a local development server. For this project this was the easiest way to create a user interface to interact with the documents being processed. Once this is created it is stagnant until a user opens the the browser with the address http://127.0.0.1:5055. Once the user does this app uses the @app.get("/") decorator to call the index() function. This means that 
-when the browser requests GET http://localhost:5055/(Which happens as soon as you open the above address) the app object searches through defined routes and finds @app.get("/") pointing to the index() function and knows to call it."""
 if __name__ == "__main__":
+    """Where it all begins. app is the Flask object created in the imports and 
+constants section. This object connects all of the files together. The run 
+function runs app.py on a local development server. For this project this was 
+the easiest way to create a user interface to interact with the documents being 
+processed. Once this is created it is stagnant until a user opens the the
+browser with the address http://127.0.0.1:5055. Once the user does this app uses
+the @app.get("/") decorator to call the index() function. This means that when 
+the browser requests GET http://localhost:5055/(Which happens as soon as you 
+open the above address) the app object searches through defined routes and finds
+ @app.get("/") pointing to the index() function and knows to call it."""
     app.run(host="127.0.0.1", port=5055, debug=True)
