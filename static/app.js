@@ -248,7 +248,7 @@ function statusLabel(document) {
 /**The selectedDocument() function returns the document in the documents property
 in the state object that has the same id as the id stored in the selectedId 
 property in the state object. It uses the find() function which returns the 
-first value in an array for which the predicate is true.*/ 
+first value in an array for which the predicate is true.*/
 function selectedDocument() {
   return state.documents.find((document) => document.id === state.selectedId);
 }
@@ -270,73 +270,165 @@ function setButtonLoading(button, isLoading, loadingText, readyText) {
   button.textContent = isLoading ? loadingText : readyText;
 }
 
-/**The batchwarnings() function returns the possible problems for the document
- * batch in the state object. First it goes through each document that is not
- * a Lookup Only document. For every document it checks that the document has an 
- * acceptable type. If it does the function checks if the typeGroups Map 
- * variable has an element with a key matching the type, if it doesn't then an
- * element is added with that type as the key. Then the document name is added 
- * to the element with the corresponding type key in typegroups. For each 
- * document the required fields are looped through, and the metadata is checked 
- * to see if that document has the required fields. If they don't filter keeps
- * the required fields and returns them. map() takes the output of filter() and 
- * returns just the labels. This return is what missing is set to. If there is 
- * anything in missing it is added to the warnings variable along with the 
- * document the missing information correspsonds to. Finally, each element in 
- * typeGroups is reviewed. If any elements have more then one value in their 
- * list a warning is added to the beginning of warnings with the duplicate
- * document type and the file names. The warning list is returned.
-*/
-function batchWarnings() {
-  const warnings = [];
-  const typeGroups = new Map();
-  const required = [
-    ['lot', 'Lot'], ['address', 'Address'], ['project_code', 'Project code'],
-    ['document_type', 'Document type'], ['tax_map', 'Tax map'],
-    ['parcel', 'Parcel'], ['tax_id', 'Tax ID']
-  ];
+/** Centralized document validation used by the warning banner, document
+ * queue, and review form. Keeping all three views on the same validation result
+ * prevents one part of the interface from reporting different issues than
+ * another. */
+const REQUIRED_METADATA_FIELDS = [
+  { key: 'lot', label: 'Lot' },
+  { key: 'address', label: 'Address' },
+  { key: 'project_code', label: 'Project code' },
+  { key: 'document_type', label: 'Document type' },
+  { key: 'tax_map', label: 'Tax map' },
+  { key: 'parcel', label: 'Parcel' },
+  { key: 'tax_id', label: 'Tax ID' },
+];
 
-  state.documents.filter((document) => !document.is_lookup_document).forEach((document) => {
-    const type = (document.metadata?.document_type || '').trim();
-    if (type && type !== 'Document' && !type.toLowerCase().startsWith('unknown')) {
-      if (!typeGroups.has(type)) typeGroups.set(type, []);
-      typeGroups.get(type).push(document.source_name);
-    }
-    const missing = required
-      .filter(([key]) => {
-        const value = String(document.metadata?.[key] || '').trim();
-        return !value || value.toLowerCase().startsWith('unknown') || value === 'Project' || value === 'Document';
-      })
-      .map(([, label]) => label);
-    if (missing.length) warnings.push(`${document.source_name}: missing ${missing.join(', ')}`);
-  });
+function isMissingMetadataValue(key, value) {
+  const normalized = String(value ?? '').trim();
+  if (!normalized) return true;
 
-  // Duplicate document types are meaningful only when the PDFs form one
-  // related batch. In mass mode every PDF is an independent job, so only
-  // per-document missing-information warnings should be shown.
+  const lowered = normalized.toLowerCase();
+  if (lowered.startsWith('unknown')) return true;
+  if (key === 'project_code' && lowered === 'project') return true;
+  if (key === 'document_type' && lowered === 'document') return true;
+  return false;
+}
+
+function normalizeIssueMessages(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => typeof item === 'string' ? item : item?.message || item?.error || JSON.stringify(item))
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+  }
+  if (typeof value === 'object') {
+    const message = value.message || value.error || value.detail;
+    return message ? [String(message).trim()] : [];
+  }
+  const message = String(value).trim();
+  return message ? [message] : [];
+}
+
+function documentTypeValue(document) {
+  return String(document?.metadata?.document_type || '').trim();
+}
+
+function buildValidationContext(documents = state.documents || []) {
+  const duplicateIds = new Set();
+  const duplicateTypesById = new Map();
   const scanMode = String(state.settings?.scan_mode || 'batch').toLowerCase();
+
+  // Duplicate types are intentionally ignored in Mass mode because each PDF is
+  // treated as an independent filing job.
   if (scanMode !== 'mass') {
-    typeGroups.forEach((files, type) => {
-      if (files.length > 1) warnings.unshift(`Duplicate document type “${type}”: ${files.join(', ')}`);
+    const typeGroups = new Map();
+    documents
+      .filter((document) => !document.is_lookup_document)
+      .forEach((document) => {
+        const type = documentTypeValue(document);
+        if (isMissingMetadataValue('document_type', type)) return;
+        const key = type.toLowerCase();
+        if (!typeGroups.has(key)) typeGroups.set(key, { type, documents: [] });
+        typeGroups.get(key).documents.push(document);
+      });
+
+    typeGroups.forEach(({ type, documents: groupedDocuments }) => {
+      if (groupedDocuments.length < 2) return;
+      groupedDocuments.forEach((document) => {
+        duplicateIds.add(document.id);
+        duplicateTypesById.set(document.id, type);
+      });
     });
   }
+
+  return { duplicateIds, duplicateTypesById, scanMode };
+}
+
+function getDocumentValidationState(document, context = buildValidationContext()) {
+  const metadata = document?.metadata || {};
+  const missingFields = REQUIRED_METADATA_FIELDS.filter(({ key }) =>
+    isMissingMetadataValue(key, metadata[key])
+  );
+  const duplicateType = context.duplicateTypesById.get(document?.id) || null;
+  const warnings = [
+    ...normalizeIssueMessages(document?.warnings),
+    ...normalizeIssueMessages(document?.warning),
+  ];
+  const errors = [
+    ...normalizeIssueMessages(document?.errors),
+    ...normalizeIssueMessages(document?.error),
+  ];
+  const status = String(document?.status || '').toLowerCase();
+  const statusError = ['error', 'failed', 'failure'].includes(status)
+    ? `Document status: ${status}`
+    : null;
+  if (statusError) errors.push(statusError);
+
+  const issues = [];
+  if (duplicateType) issues.push({ kind: 'duplicate', message: `Duplicate document type “${duplicateType}”` });
+  if (missingFields.length) {
+    issues.push({
+      kind: 'missing',
+      message: `Missing ${missingFields.map(({ label }) => label).join(', ')}`,
+      fields: missingFields.map(({ key }) => key),
+    });
+  }
+  warnings.forEach((message) => issues.push({ kind: 'warning', message }));
+  errors.forEach((message) => issues.push({ kind: 'error', message }));
+
+  return {
+    missingFields,
+    missingFieldKeys: new Set(missingFields.map(({ key }) => key)),
+    duplicateType,
+    warnings,
+    errors,
+    issues,
+    hasIssues: issues.length > 0,
+    severity: errors.length || duplicateType ? 'error' : issues.length ? 'warning' : 'none',
+  };
+}
+
+function suggestedDocumentLabel(item) {
+  const rawType = String(item.metadata?.document_type || '').trim();
+  const rawLot = String(item.metadata?.lot || '').trim();
+  const type = isMissingMetadataValue('document_type', rawType) ? 'Unknown Type' : rawType;
+  const lot = isMissingMetadataValue('lot', rawLot) ? 'Unknown Lot' : `Lot ${rawLot}`;
+  return `${type} - ${lot}`;
+}
+
+function batchWarnings() {
+  const warnings = [];
+  const documents = (state.documents || []).filter((document) => !document.is_lookup_document);
+  const context = buildValidationContext(documents);
+  const reportedDuplicateTypes = new Set();
+
+  documents.forEach((document) => {
+    const validation = getDocumentValidationState(document, context);
+    const label = suggestedDocumentLabel(document);
+
+    if (validation.duplicateType) {
+      const duplicateKey = validation.duplicateType.toLowerCase();
+      if (!reportedDuplicateTypes.has(duplicateKey)) {
+        const matching = documents
+          .filter((candidate) => documentTypeValue(candidate).toLowerCase() === duplicateKey)
+          .map((candidate) => suggestedDocumentLabel(candidate));
+        warnings.push(`Duplicate document type “${validation.duplicateType}”: ${matching.join(', ')}`);
+        reportedDuplicateTypes.add(duplicateKey);
+      }
+    }
+
+    if (validation.missingFields.length) {
+      warnings.push(`${label}: missing ${validation.missingFields.map(({ label: fieldLabel }) => fieldLabel).join(', ')}`);
+    }
+    validation.warnings.forEach((message) => warnings.push(`${label}: ${message}`));
+    validation.errors.forEach((message) => warnings.push(`${label}: ${message}`));
+  });
+
   return warnings;
 }
 
-/**The renderBatchWarnings() function displays any errors that are occuring in 
- * the current batch of documents held in state. It begins by pointing banner to 
- * the batchWarning <div>. Then it checks that it exists if it doesn't the 
- * function returns nothing. Next it sets warnings to the return of 
- * batchWarnings() which returns a list of strings with unknown document type, 
- * multiple documents with the same type, and/or documents with missing 
- * information. If the length of warnings is 0 the batchWarning <div> has hidden
- * added to its class list so its not visible to the user anymore. The <div> 
- * also has the HTML within it cleared so there are no leftover warning messages 
- * which aren't supposed to be there. If the <div> exists and there are warnings
- * then all of the warning are added to an unordered list within the 
- * batchWarning <div>. Finally the hidden class is removed from the <div> to 
- * make it visible to the user.
-*/
 function renderBatchWarnings() {
   const banner = $('batchWarning');
   if (!banner) return;
@@ -354,34 +446,23 @@ function renderBatchWarnings() {
   banner.classList.remove('hidden');
 }
 
-/**The renderlist() function adds buttons to access and edit documents with 
-information is stored in documents.json. The list variable stores a pointer to 
-the <div> element with the documentList id in index.html. .innerhtml is then 
-called to remove any leftover items inside the <div> with id=documentList. The 
-visibleDocuments variable is set to a pointer to the documents property of the 
-state object. The textContent() function is called on the <span> with 
-id=queuecount in order to set the text within it to the number of documents in 
-the state object via visibleDocuments.length. For every document a button is 
-created by the createElement() function which generates different HTML elements 
-based on the parameter passed in. That button has its class set to 
-doc-row.active which makes the CSS update the color of the button to show that 
-this specific document is the current active document. A span is then added to
-the internals of the button with its name and status with the innerHTML 
-function. Next the button is set so that whenever it is clicked the 
-selectDocument() function is called on that specific items id using the 
-addEventListener() function. Finally the buttons created in the forEach loop are 
-added to the list of children which belong to the <div> with id=documentList 
-with the .appendChild() function. */
 function renderList() {
   const list = $('documentList');
   list.innerHTML = '';
   const visibleDocuments = state.documents || [];
   $('queueCount').textContent = String(visibleDocuments.length);
+  const validationContext = buildValidationContext(visibleDocuments);
 
   visibleDocuments.forEach((item) => {
+    const validation = getDocumentValidationState(item, validationContext);
     const button = document.createElement('button');
-    button.className = `doc-row ${item.id === state.selectedId ? 'active' : ''}`;
-    button.innerHTML = `<strong>${item.source_name}</strong>`;
+    button.className = `doc-row ${item.id === state.selectedId ? 'active' : ''} ${validation.hasIssues ? 'has-issues' : ''}`;
+    button.setAttribute('aria-label', `${suggestedDocumentLabel(item)}${validation.hasIssues ? ', needs attention' : ''}`);
+    if (validation.hasIssues) button.title = validation.issues.map((issue) => issue.message).join('\n');
+
+    const strong = document.createElement('strong');
+    strong.textContent = suggestedDocumentLabel(item);
+    button.appendChild(strong);
     button.addEventListener('click', () => selectDocument(item.id));
     list.appendChild(button);
   });
@@ -395,7 +476,6 @@ function renderList() {
   }
 }
 
-
 /**The renderSelectedDocument() function makes the document and review pane for 
 that document given by the document parameter, visible to the user. It begins by
 adding the hidden class to the emptyState <div> to hide it and doing the 
@@ -408,6 +488,24 @@ updated with the source_name field in the document parameter. The documentStatus
 <div> is updated with the statusLabel() function with a nice version of the 
 documents current status. Each field is updated with the document parameter's
 metadata.*/
+function renderMissingMetadataHighlights(document) {
+  const validation = getDocumentValidationState(document, buildValidationContext());
+  const ids = {
+    lot: 'lot', address: 'address', tax_map: 'taxMap', parcel: 'parcel',
+    tax_id: 'taxId', project_code: 'editProjectCode', document_type: 'editDocumentType'
+  };
+
+  Object.entries(ids).forEach(([key, id]) => {
+    const field = $(id);
+    if (!field) return;
+    const container = key === 'document_type'
+      ? field.closest('.document-type-card')
+      : field.closest('label');
+    if (container) container.classList.toggle('metadata-missing', validation.missingFieldKeys.has(key));
+    field.setAttribute('aria-invalid', validation.missingFieldKeys.has(key) ? 'true' : 'false');
+  });
+}
+
 function renderSelectedDocument(document) {
   $('emptyState').classList.add('hidden');
   $('reviewPane').classList.remove('hidden');
@@ -434,6 +532,7 @@ function renderSelectedDocument(document) {
   fields.section.value = document.metadata.section || '';
   fields.editProjectCode.value = document.metadata.project_code || '';
   if (fields.editDocumentType) fields.editDocumentType.value = document.metadata.document_type || 'Field Notes';
+  renderMissingMetadataHighlights(document);
   $('fileButton').disabled = document.status === 'filed' || document.is_lookup_document;
   $('fileButton').title = document.is_lookup_document
     ? 'Lookup-only documents are removed after the permanent batch is filed.'

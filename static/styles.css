@@ -1233,3 +1233,28 @@ select:focus {
 .batch-warning li {
   line-height: 1.3;
 }
+
+/* Per-document attention state and missing metadata emphasis. */
+.doc-row.has-issues,
+.bottom-queue-panel .doc-row.has-issues {
+  background: #7a1616 !important;
+  border-color: #520d0d !important;
+  color: #fff !important;
+}
+.doc-row.has-issues strong,
+.doc-row.has-issues span { color: #fff !important; }
+.doc-row.has-issues.active { outline: 3px solid #f2b6b6; outline-offset: 1px; }
+.document-type-card.metadata-missing,
+.primary-metadata-card.metadata-missing,
+.secondary-metadata-grid > label.metadata-missing {
+  background: linear-gradient(180deg, #ffe1e1, #fff4f4) !important;
+  border-color: #b42323 !important;
+  box-shadow: 0 0 0 2px rgba(180,35,35,.16), 0 4px 13px rgba(122,22,22,.14) !important;
+  color: #8b1515 !important;
+}
+.metadata-missing input,
+.metadata-missing select {
+  border-color: #b42323 !important;
+  background: #fffafa !important;
+  color: #7a1616 !important;
+}
