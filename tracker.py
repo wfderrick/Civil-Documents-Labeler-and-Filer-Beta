@@ -3,8 +3,10 @@ import csv
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
 TRACKER_DIR = Path(r"C:\ocr tracker")
 TRACKER_FILE = TRACKER_DIR / "filed_batches.csv"
+
 
 def append_batch_tracker(
     documents: list[dict[str, Any]],

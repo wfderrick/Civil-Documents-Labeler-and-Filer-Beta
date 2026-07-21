@@ -13,8 +13,10 @@ from sdat import (
     metadata_from_sdat_record,
 )
 from state_store import load_config_from_state
+
 REQUIRED_METADATA_FIELDS = ("lot", "address", "project_code", "document_type")
 OPTIONAL_METADATA_FIELDS = ("tax_map", "parcel", "tax_id", "section")
+
 
 def is_unknown(value: str) -> bool:
     """The is_unknown() function returns True if the value parameter is unknown
@@ -26,6 +28,7 @@ def is_unknown(value: str) -> bool:
         or value.lower().startswith("unknown")
         or value in {"Project", "Document"}
     )
+
 
 def suggested_folder(metadata: dict[str, str]) -> str:
     """The suggested_folder() function returns a string with a suggested folder name
@@ -39,6 +42,7 @@ def suggested_folder(metadata: dict[str, str]) -> str:
         "Unknown Lot - Unknown Address",
     )
 
+
 def suggested_filename(metadata: dict[str, str], source_name: str) -> str:
     """The suggested_filename() function returns a string with a suggested file name
     based on the metadata parameter. The file name follows the naming conventions
@@ -46,10 +50,9 @@ def suggested_filename(metadata: dict[str, str], source_name: str) -> str:
     information are pulled from the metadata parameter they are passed into the
     safe_path_part() function imported from pipeline.py to ensure they contain only
     allowed characters and remove extra spaces."""
-    stem = (
-        f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}"
-    )
+    stem = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}"
     return safe_path_part(stem, Path(source_name).stem) + ".pdf"
+
 
 def document_status(metadata: dict[str, str]) -> str:
     """The document_status() function returns either needs_review or ready based
@@ -60,11 +63,11 @@ def document_status(metadata: dict[str, str]) -> str:
     return (
         "needs_review"
         if any(
-            is_unknown(metadata.get(field, ""))
-            for field in REQUIRED_METADATA_FIELDS
+            is_unknown(metadata.get(field, "")) for field in REQUIRED_METADATA_FIELDS
         )
         else "ready"
     )
+
 
 def sync_document_metadata(
     document: dict[str, Any],
@@ -92,21 +95,17 @@ def sync_document_metadata(
     )
     return document
 
-def find_document(
-    state: dict[str, Any], document_id: str
-) -> dict[str, Any] | None:
+
+def find_document(state: dict[str, Any], document_id: str) -> dict[str, Any] | None:
     """The find_document() function returns the document in the state parameter
     with id matching the document_id parameter or None if there aren't any
     documents in the state parameter with an id that matches the document_id
     parameter."""
     return next(
-        (
-            doc
-            for doc in state.get("documents", [])
-            if doc.get("id") == document_id
-        ),
+        (doc for doc in state.get("documents", []) if doc.get("id") == document_id),
         None,
     )
+
 
 def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
     return ExtractedMetadata(
@@ -195,6 +194,7 @@ def refresh_batch_property_fields_from_sdat(
         sync_document_metadata(batch_document, auto_folder=True, auto_file_name=True)
     return values
 
+
 def apply_document_update(
     state: dict[str, Any], document: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -212,9 +212,7 @@ def apply_document_update(
         "project_code",
     )
     shared_updates = {
-        field: payload[field]
-        for field in shared_field_names
-        if field in payload
+        field: payload[field] for field in shared_field_names if field in payload
     }
     changed_field = payload.get("changed_field", "")
 
@@ -250,9 +248,7 @@ def apply_document_update(
         )
 
     if payload.get("auto_file_name"):
-        document["file_name"] = suggested_filename(
-            metadata, document["source_name"]
-        )
+        document["file_name"] = suggested_filename(metadata, document["source_name"])
     elif "file_name" in payload:
         stem = Path(payload["file_name"]).stem
         document["file_name"] = (
@@ -260,6 +256,7 @@ def apply_document_update(
         )
 
     return sync_document_metadata(document)
+
 
 def file_document_to_output(
     document: dict[str, Any],
@@ -277,9 +274,7 @@ def file_document_to_output(
         folder_name or document.get("folder_name", ""),
         "Unknown Lot - Unknown Address",
     )
-    file_stem = Path(
-        file_name or document.get("file_name", source_path.name)
-    ).stem
+    file_stem = Path(file_name or document.get("file_name", source_path.name)).stem
     resolved_file_name = safe_path_part(file_stem, source_path.stem) + ".pdf"
 
     destination_folder = output_folder / resolved_folder

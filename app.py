@@ -23,10 +23,8 @@ from pipeline import (
 
 from document_service import (
     apply_document_update,
-    refresh_batch_property_fields_from_sdat,
     file_document_to_output,
     find_document,
-    metadata_from_dict,
     suggested_filename,
     suggested_folder,
     sync_document_metadata,
@@ -41,7 +39,6 @@ from state_store import (
     read_state,
     write_state,
     update_output_folder_setting,
-    load_config_from_state,
 )
 from tracker import append_batch_tracker
 
@@ -273,7 +270,6 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
 
     finally:
         return project_code.strip(), section.strip()
-
 
 
 """-----------------------------------------------------------------------------------------------"""

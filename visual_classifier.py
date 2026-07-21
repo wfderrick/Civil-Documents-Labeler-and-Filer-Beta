@@ -6,6 +6,8 @@ from typing import Any
 
 import fitz
 import numpy as np
+from dataclasses import replace
+from metadata_extraction import Config, ExtractedMetadata
 
 try:
     import joblib  # type: ignore[reportMissingImports]
@@ -39,14 +41,20 @@ def _get_cached_model(model_file: Path) -> Any:
     return _load_model_cached(str(model_file.resolve()), stat.st_mtime_ns)
 
 
-def render_page_gray(pdf_path: Path, page_index: int = 0, dpi: int = 72) -> np.ndarray | None:
+def render_page_gray(
+    pdf_path: Path, page_index: int = 0, dpi: int = 72
+) -> np.ndarray | None:
     """Render one PDF page as a small grayscale numpy image for visual classification."""
     try:
         with fitz.open(pdf_path) as doc:
             if doc.page_count <= page_index:
                 return None
-            pix = doc[page_index].get_pixmap(matrix=fitz.Matrix(dpi / 72, dpi / 72), alpha=False)
-            image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+            pix = doc[page_index].get_pixmap(
+                matrix=fitz.Matrix(dpi / 72, dpi / 72), alpha=False
+            )
+            image = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
+                pix.height, pix.width, 3
+            )
             return image.mean(axis=2).astype(np.uint8)
     except Exception:
         return None
@@ -60,7 +68,9 @@ def pdf_page_count(pdf_path: Path) -> int:
         return 0
 
 
-def _resize_sample(gray: np.ndarray, target_h: int = 256, target_w: int = 192) -> np.ndarray:
+def _resize_sample(
+    gray: np.ndarray, target_h: int = 256, target_w: int = 192
+) -> np.ndarray:
     """Fast dependency-free resize by sampling. Good enough for classification features."""
     if gray.size == 0:
         return np.zeros((target_h, target_w), dtype=np.uint8)
@@ -94,7 +104,7 @@ def visual_features(pdf_path: Path) -> np.ndarray:
     edge_ratio = float((dx > 30).mean() + (dy > 30).mean()) / 2.0
 
     h, w = small.shape
-    lower_right = small[int(h * 0.62):, int(w * 0.55):]
+    lower_right = small[int(h * 0.62) :, int(w * 0.55) :]
     top_half = small[: int(h * 0.50), :]
     left_half = small[:, : int(w * 0.50)]
 
@@ -106,17 +116,20 @@ def visual_features(pdf_path: Path) -> np.ndarray:
             zone = small[y0:y1, x0:x1]
             zone_features.append(float((zone < 185).mean()) if zone.size else 0.0)
 
-    return np.array([
-        float(page_count),
-        float(w) / float(h or 1),
-        float(dark.mean()),
-        float(very_dark.mean()),
-        edge_ratio,
-        float((lower_right < 185).mean()) if lower_right.size else 0.0,
-        float((top_half < 185).mean()) if top_half.size else 0.0,
-        float((left_half < 185).mean()) if left_half.size else 0.0,
-        *zone_features,
-    ], dtype=float)
+    return np.array(
+        [
+            float(page_count),
+            float(w) / float(h or 1),
+            float(dark.mean()),
+            float(very_dark.mean()),
+            edge_ratio,
+            float((lower_right < 185).mean()) if lower_right.size else 0.0,
+            float((top_half < 185).mean()) if top_half.size else 0.0,
+            float((left_half < 185).mean()) if left_half.size else 0.0,
+            *zone_features,
+        ],
+        dtype=float,
+    )
 
 
 def heuristic_field_notes_probability(pdf_path: Path) -> float:
@@ -145,7 +158,9 @@ def heuristic_field_notes_probability(pdf_path: Path) -> float:
     return max(0.0, min(0.98, score))
 
 
-def classify_pdf_visual(pdf_path: str | Path, model_path: str | Path | None = None) -> tuple[str, float]:
+def classify_pdf_visual(
+    pdf_path: str | Path, model_path: str | Path | None = None
+) -> tuple[str, float]:
     """Classify a PDF visually as field_notes or not_field_notes.
 
     If visual_field_notes_classifier.joblib exists and joblib is installed, it is used.
@@ -170,10 +185,14 @@ def classify_pdf_visual(pdf_path: str | Path, model_path: str | Path | None = No
     return NOT_FIELD_NOTES_LABEL, 1.0 - probability
 
 
-def train_visual_classifier(training_root: str | Path, output_model: str | Path = MODEL_PATH) -> None:
+def train_visual_classifier(
+    training_root: str | Path, output_model: str | Path = MODEL_PATH
+) -> None:
     """Train binary visual classifier from folders: field_notes and not_field_notes."""
     if joblib is None:
-        raise RuntimeError("Install joblib and scikit-learn to train the visual classifier.")
+        raise RuntimeError(
+            "Install joblib and scikit-learn to train the visual classifier."
+        )
     from sklearn.ensemble import RandomForestClassifier  # type: ignore[reportMissingImports]
     from sklearn.model_selection import train_test_split  # type: ignore[reportMissingImports]
     from sklearn.metrics import classification_report  # type: ignore[reportMissingImports]
@@ -192,19 +211,28 @@ def train_visual_classifier(training_root: str | Path, output_model: str | Path 
             y.append(label)
 
     if len(set(y)) < 2:
-        raise RuntimeError("Training data must include both field_notes and not_field_notes PDFs.")
+        raise RuntimeError(
+            "Training data must include both field_notes and not_field_notes PDFs."
+        )
     if len(y) < 6:
-        raise RuntimeError("Add more training PDFs before training. Aim for at least 20 per folder.")
+        raise RuntimeError(
+            "Add more training PDFs before training. Aim for at least 20 per folder."
+        )
 
     X = np.vstack(x)
-    if len(y) >= 10 and min(y.count(FIELD_NOTES_LABEL), y.count(NOT_FIELD_NOTES_LABEL)) >= 2:
+    if (
+        len(y) >= 10
+        and min(y.count(FIELD_NOTES_LABEL), y.count(NOT_FIELD_NOTES_LABEL)) >= 2
+    ):
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.25, random_state=42, stratify=y
         )
     else:
         X_train, X_test, y_train, y_test = X, X, y, y
 
-    model = RandomForestClassifier(n_estimators=400, random_state=42, class_weight="balanced")
+    model = RandomForestClassifier(
+        n_estimators=400, random_state=42, class_weight="balanced"
+    )
     model.fit(X_train, y_train)
     joblib.dump(model, output_model)
     clear_model_cache()
@@ -215,17 +243,17 @@ def train_visual_classifier(training_root: str | Path, output_model: str | Path 
 
 
 # Batch post-processing helpers moved from pipeline.py.
-from dataclasses import replace
-from typing import Any
-from metadata_extraction import Config, ExtractedMetadata
+
 
 PLAN_DOCUMENT_TYPES = {"Site Plan", "House Location", "Wall Check"}
+
 
 def _field_notes_visual_threshold(config: Config) -> float:
     try:
         return float(config.get("visual_field_notes_threshold", 0.70))
     except Exception:
         return 0.70
+
 
 def fix_duplicate_document_types_with_visual_classifier(
     votes: list[ExtractedMetadata],

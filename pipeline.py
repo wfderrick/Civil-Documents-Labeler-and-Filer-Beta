@@ -17,7 +17,6 @@ from metadata_extraction import (
 from sdat import (
     LOOKUP_DOCUMENT_TYPE,
     SdatSearchTerms,
-    extract_tax_id_parts,
     lookup_by_tax_id,
     lookup_maryland_property_by_address,
     lookup_maryland_property_records,
@@ -59,7 +58,6 @@ def extract_document_metadata_votes(
         )
         for document in scanned_documents
     ]
-
 
 
 # Backward-compatible alias for older callers.

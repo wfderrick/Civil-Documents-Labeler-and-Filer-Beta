@@ -3,10 +3,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 import fitz
+
 try:
     import pikepdf
 except Exception:
     pikepdf = None
+
 
 def metadata_keyword_text(document: dict[str, Any]) -> str:
     metadata = document.get("metadata", {})
@@ -22,9 +24,8 @@ def metadata_keyword_text(document: dict[str, Any]) -> str:
         "source_name": document.get("source_name", ""),
         "filed_at": datetime.now().isoformat(timespec="seconds"),
     }
-    return "; ".join(
-        f"{key}={value}" for key, value in custom_text.items() if value
-    )
+    return "; ".join(f"{key}={value}" for key, value in custom_text.items() if value)
+
 
 def _ocr_item_pdf_rect(
     item: dict[str, Any],
@@ -40,9 +41,7 @@ def _ocr_item_pdf_rect(
 
     try:
         # Preferred normalized bbox format: [x0, y0, x1, y1].
-        if len(raw) == 4 and all(
-            isinstance(value, (int, float)) for value in raw
-        ):
+        if len(raw) == 4 and all(isinstance(value, (int, float)) for value in raw):
             x0, y0, x1, y1 = [float(value) for value in raw]
         else:
             # Compatibility with four-point PaddleOCR polygons.
@@ -64,9 +63,8 @@ def _ocr_item_pdf_rect(
         return None
     return rect
 
-def add_paddle_searchable_text_layer(
-    pdf_path: Path, document: dict[str, Any]
-) -> None:
+
+def add_paddle_searchable_text_layer(pdf_path: Path, document: dict[str, Any]) -> None:
     """Add selectable, invisible text using the stored PaddleOCR geometry.
 
     PaddleOCR coordinates are measured in rendered-image pixels. They are
@@ -111,9 +109,7 @@ def add_paddle_searchable_text_layer(
                 # being placed at the bottom of the box, which keeps selection
                 # geometry aligned with the detected line.
                 natural_width = max(font.text_length(text, fontsize=1), 0.01)
-                height_size = rect.height / max(
-                    font.ascender - font.descender, 0.01
-                )
+                height_size = rect.height / max(font.ascender - font.descender, 0.01)
                 width_size = (rect.width * 0.98) / natural_width
                 font_size = min(max(min(height_size, width_size), 1.0), 72.0)
                 baseline_y = rect.y0 + (font.ascender * font_size)
@@ -136,9 +132,8 @@ def add_paddle_searchable_text_layer(
             # Incremental save is fast and preserves the scanned page content.
             pdf.saveIncr()
 
-def write_standard_pdf_metadata(
-    pdf_path: Path, document: dict[str, Any]
-) -> None:
+
+def write_standard_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
     metadata = document.get("metadata", {})
     with fitz.open(pdf_path) as pdf:
         pdf.set_metadata(
@@ -151,6 +146,7 @@ def write_standard_pdf_metadata(
             }
         )
         pdf.saveIncr()
+
 
 def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
     """Write structured XMP metadata with a custom COA namespace."""
@@ -197,14 +193,13 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
     except Exception as exc:
         print(f"Could not write XMP metadata to {pdf_path}: {exc}")
 
+
 def write_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
     """Write standard metadata, structured XMP, and a PaddleOCR text layer."""
     try:
         add_paddle_searchable_text_layer(pdf_path, document)
     except Exception as exc:
-        print(
-            f"Could not add PaddleOCR searchable text layer to {pdf_path}: {exc}"
-        )
+        print(f"Could not add PaddleOCR searchable text layer to {pdf_path}: {exc}")
 
     try:
         write_standard_pdf_metadata(pdf_path, document)

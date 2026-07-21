@@ -7,8 +7,12 @@ from visual_classifier import classify_pdf_visual
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Test the binary visual Field Notes classifier on PDFs.")
-    parser.add_argument("path", type=Path, help="PDF file or folder of PDFs to classify.")
+    parser = argparse.ArgumentParser(
+        description="Test the binary visual Field Notes classifier on PDFs."
+    )
+    parser.add_argument(
+        "path", type=Path, help="PDF file or folder of PDFs to classify."
+    )
     args = parser.parse_args()
 
     paths = [args.path] if args.path.is_file() else sorted(args.path.glob("*.pdf"))

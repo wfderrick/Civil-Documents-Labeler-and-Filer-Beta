@@ -112,9 +112,11 @@ OCR_NUMBER_MAP = str.maketrans(
     }
 )
 
+
 def normalize_ocr_numbers(text: str) -> str:
     """Normalize OCR mistakes that commonly appear inside numeric identifiers."""
     return str(text or "").translate(OCR_NUMBER_MAP)
+
 
 @dataclass(frozen=True)
 class ExtractedMetadata:
@@ -127,6 +129,7 @@ class ExtractedMetadata:
     tax_id: str = ""
     section: str = ""
 
+
 @dataclass(frozen=True)
 class FuzzyMatch:
     label: str
@@ -136,7 +139,9 @@ class FuzzyMatch:
     matched_text: str
     keyword: str
 
+
 Config = dict[str, Any]
+
 
 def load_config(path: Path | None) -> Config:
     """The load_config() function returns a dictionary with settings and regex
@@ -161,6 +166,7 @@ def load_config(path: Path | None) -> Config:
     )
     return config
 
+
 def normalize_value(value: str) -> str:
     """The normalize_value() function returns a cleaned version of the value
     parameter. To begin it calls the built in str() class on either value if it is
@@ -172,6 +178,7 @@ def normalize_value(value: str) -> str:
     Then strip() is called on the result of join() to remove any leading or
     trailing spaces and/or bad characters like :, -, #, ., ,,and/or ;."""
     return " ".join(str(value or "").split()).strip(" :-#.,;")
+
 
 def first_match(
     text: str, patterns: Iterable[str], *, normalize_numbers: bool = False
@@ -192,6 +199,7 @@ def first_match(
         return normalize_value(match.group(1))
 
     return None
+
 
 def all_matches(
     text: str, patterns: Iterable[str], *, normalize_numbers: bool = False
@@ -216,6 +224,7 @@ def all_matches(
 
     return values
 
+
 def safe_path_part(value: str, fallback: str) -> str:
     """The safe_path_part() function returns a string which represents a file or
     folder name which is allowed. To begin the normalize_value() function is called
@@ -230,6 +239,7 @@ def safe_path_part(value: str, fallback: str) -> str:
     value = value.strip(" .")
     return value[:140] or fallback
 
+
 def unique_path(path: Path) -> Path:
     if not path.exists():
         return path
@@ -239,8 +249,10 @@ def unique_path(path: Path) -> Path:
             return candidate
     raise RuntimeError(f"Could not create a unique path for {path}")
 
+
 def normalize_for_fuzzy(value: str) -> str:
     return str(value or "").lower().translate(OCR_CONFUSION_MAP)
+
 
 def keyword_groups(raw_keywords: Any) -> dict[str, list[str]]:
     if isinstance(raw_keywords, Mapping):
@@ -255,6 +267,7 @@ def keyword_groups(raw_keywords: Any) -> dict[str, list[str]]:
     if isinstance(raw_keywords, list):
         return {str(label): [str(label)] for label in raw_keywords}
     return {}
+
 
 def best_keyword_window(keyword: str, normalized_text: str) -> tuple[float, int, int]:
     """Return the best fuzzy keyword window while preserving legacy tie behavior.
@@ -296,6 +309,7 @@ def best_keyword_window(keyword: str, normalized_text: str) -> tuple[float, int,
                     return best_score, best_start, best_end
     return best_score, best_start, best_end
 
+
 def fuzzy_document_type(
     text: str, keywords: Any, threshold: float = DOCUMENT_TYPE_THRESHOLD
 ) -> FuzzyMatch | None:
@@ -320,6 +334,7 @@ def fuzzy_document_type(
                 best = match
     return best if best and best.score >= threshold else None
 
+
 def is_ignored_address(address: str, config: Config) -> bool:
     cleaned = normalize_for_fuzzy(address)
     compact = re.sub(r"[^a-z0-9]", "", cleaned)
@@ -336,6 +351,7 @@ def is_ignored_address(address: str, config: Config) -> bool:
         if normalize_for_fuzzy(str(keyword))
     )
 
+
 def _ocr_item_rect(item: Mapping[str, Any]) -> tuple[float, float, float, float] | None:
     """Return an OCR item's rectangle as x0, y0, x1, y1."""
     raw = first_nonempty_value(item.get("bbox"), item.get("polygon"))
@@ -348,6 +364,7 @@ def _ocr_item_rect(item: Mapping[str, Any]) -> tuple[float, float, float, float]
         return None
     x0, y0, x1, y1 = _bbox_from_points(points)
     return x0, y0, x1, y1
+
 
 def _layout_address_lines(
     ocr_pages: Iterable[Mapping[str, Any]],
@@ -418,6 +435,7 @@ def _layout_address_lines(
                 lines.append(line)
     return lines
 
+
 def first_valid_address(
     text: str,
     config: Config,
@@ -480,7 +498,11 @@ def first_nonempty_value(*values: Any) -> Any:
 
 def is_known_value(value: str) -> bool:
     value = str(value or "").strip()
-    return bool(value) and not value.lower().startswith("unknown") and value not in {"Project", "Document"}
+    return (
+        bool(value)
+        and not value.lower().startswith("unknown")
+        and value not in {"Project", "Document"}
+    )
 
 
 def extract_metadata(
@@ -490,7 +512,11 @@ def extract_metadata(
     default_document_type: str,
     ocr_pages: Iterable[Mapping[str, Any]] | None = None,
 ) -> ExtractedMetadata:
-    from sdat import LOOKUP_DOCUMENT_TYPE, extract_sdat_lookup_tax_id, is_sdat_lookup_document
+    from sdat import (
+        LOOKUP_DOCUMENT_TYPE,
+        extract_sdat_lookup_tax_id,
+        is_sdat_lookup_document,
+    )
 
     if is_sdat_lookup_document(text):
         lookup = extract_sdat_lookup_tax_id(text)
@@ -542,12 +568,15 @@ def extract_metadata(
         tax_id=safe_path_part(tax_id, "") if tax_id else "",
     )
 
+
 def prefer_known(value: str, fallback: str) -> str:
     return value if is_known_value(value) else fallback
+
 
 def normalize_identifier(value: Any) -> str:
     cleaned = re.sub(r"[^0-9A-Za-z]", "", str(value or "")).upper()
     return cleaned.lstrip("0") or cleaned
+
 
 def identifier_options(
     value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)

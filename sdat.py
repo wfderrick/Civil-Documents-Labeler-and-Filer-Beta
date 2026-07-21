@@ -4,8 +4,18 @@ import sys
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 import requests
-from tax_id_utils import extract_tax_id_parts, format_tax_id, normalize_tax_id
-from metadata_extraction import (Config, ExtractedMetadata, first_match, identifier_options, normalize_for_fuzzy, normalize_identifier, normalize_ocr_numbers, normalize_value, prefer_known, safe_path_part)
+from tax_id_utils import extract_tax_id_parts
+from metadata_extraction import (
+    Config,
+    ExtractedMetadata,
+    first_match,
+    identifier_options,
+    normalize_for_fuzzy,
+    normalize_identifier,
+    normalize_ocr_numbers,
+    normalize_value,
+    safe_path_part,
+)
 
 LOOKUP_DOCUMENT_TYPE = "Lookup Only"
 
@@ -39,6 +49,7 @@ SDAT_FIELDS = {
     "link": "real_property_search_link",
 }
 
+
 @dataclass(frozen=True)
 class SdatSearchTerms:
     county: str = ""
@@ -48,21 +59,6 @@ class SdatSearchTerms:
     tax_id: str = ""
     district: str = ""
     account_number: str = ""
-
-def extract_tax_id_parts(tax_id: str) -> tuple[str, str]:
-    """
-    The extract_tax_id_parts() function returns a tax id split into its parts
-    aka district and account number. (ex 01-123456 District: 01 Account Number:
-    123456). It first
-    """
-    try:
-        district, account_number = tax_id.split("-", 1)
-    except ValueError as exc:
-        raise ValueError(
-            f"Invalid Tax ID format: '{tax_id}'. Expected '##-######'."
-        ) from exc
-
-    return district.strip(), account_number.strip()
 
 
 def lookup_by_tax_id(tax_id: str, county: str = "") -> list[dict[str, Any]]:
@@ -78,6 +74,7 @@ def lookup_by_tax_id(tax_id: str, county: str = "") -> list[dict[str, Any]]:
             account_number=account_number,
         )
     )
+
 
 def is_sdat_lookup_document(text: str) -> bool:
     """Identify an SDAT printout using several stable page anchors."""
@@ -95,6 +92,7 @@ def is_sdat_lookup_document(text: str) -> bool:
     )
     return (strong_header and account_block) or hits >= 4
 
+
 def extract_sdat_lookup_tax_id(text: str) -> tuple[str, str, str] | None:
     """Extract district/account from an SDAT printout and build its Tax ID."""
     patterns = (
@@ -111,8 +109,10 @@ def extract_sdat_lookup_tax_id(text: str) -> tuple[str, str, str] | None:
             return district, account, f"{district}-{account}"
     return None
 
+
 def soql_escape(value: str) -> str:
     return str(value or "").replace("'", "''").strip()
+
 
 def or_equals(field: str, value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)) -> str:
     options = identifier_options(value, widths)
@@ -121,6 +121,7 @@ def or_equals(field: str, value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)) -
         + " OR ".join(f"{field} = '{soql_escape(option)}'" for option in options)
         + ")"
     )
+
 
 def extract_sdat_search_terms(
     text: str, metadata: ExtractedMetadata, config: Config
@@ -168,6 +169,7 @@ def extract_sdat_search_terms(
         account_number=safe_path_part(account_number, "") if account_number else "",
     )
 
+
 def selected_sdat_fields() -> list[str]:
     return [
         SDAT_FIELDS["county"],
@@ -189,6 +191,7 @@ def selected_sdat_fields() -> list[str]:
         SDAT_FIELDS["link"],
     ]
 
+
 def sdat_get(where_parts: list[str], limit: int = 200) -> list[dict[str, Any]]:
     if not where_parts:
         return []
@@ -207,6 +210,7 @@ def sdat_get(where_parts: list[str], limit: int = 200) -> list[dict[str, Any]]:
         response.raise_for_status()
     return response.json()
 
+
 def record_identifier_matches(record: dict[str, Any], key: str, target: str) -> bool:
     if not target:
         return True
@@ -214,6 +218,7 @@ def record_identifier_matches(record: dict[str, Any], key: str, target: str) -> 
     return normalize_identifier(
         record.get(SDAT_FIELDS[field], "")
     ) == normalize_identifier(target)
+
 
 def filter_sdat_records(
     records: list[dict[str, Any]], terms: SdatSearchTerms
@@ -240,6 +245,7 @@ def filter_sdat_records(
             continue
         filtered.append(record)
     return filtered or records
+
 
 def lookup_maryland_property_records(terms: SdatSearchTerms) -> list[dict[str, Any]]:
     county_filter = (
@@ -303,6 +309,7 @@ def lookup_maryland_property_records(terms: SdatSearchTerms) -> list[dict[str, A
 
     return []
 
+
 def format_sdat_address(record: dict[str, Any]) -> str:
     number = normalize_value(record.get(SDAT_FIELDS["premise_number"], ""))
     street = normalize_value(record.get(SDAT_FIELDS["premise_name"], ""))
@@ -324,12 +331,14 @@ def format_sdat_address(record: dict[str, Any]) -> str:
         else ""
     )
 
+
 def tax_id_from_sdat_record(record: dict[str, Any]) -> str:
     district = normalize_value(record.get(SDAT_FIELDS["district"], ""))
     account = normalize_value(record.get(SDAT_FIELDS["account_number"], ""))
     if district and account:
         return f"{district.zfill(2)}-{account.zfill(6)}"
     return ""
+
 
 def metadata_from_sdat_record(
     metadata: ExtractedMetadata, record: dict[str, Any]
@@ -351,6 +360,7 @@ def metadata_from_sdat_record(
         tax_id=safe_path_part(tax_id, "") if tax_id else metadata.tax_id,
         section=safe_path_part(section, "") if section else metadata.section,
     )
+
 
 def _address_tokens(address: str) -> tuple[str, list[str]]:
     cleaned = re.sub(r"[^0-9A-Za-z ]", " ", str(address or "")).upper()
@@ -382,6 +392,7 @@ def _address_tokens(address: str) -> tuple[str, list[str]]:
     words = [part for part in parts[1:] if part not in stop and not part.isdigit()]
     return number, words[:3]
 
+
 def lookup_maryland_property_by_address(
     address: str, county: str = "", limit: int = 100
 ) -> list[dict[str, Any]]:
@@ -412,6 +423,7 @@ def lookup_maryland_property_by_address(
         )
 
     return sorted(records, key=score, reverse=True)
+
 
 def enrich_metadata_with_sdat(
     metadata: ExtractedMetadata, text: str, config: Config

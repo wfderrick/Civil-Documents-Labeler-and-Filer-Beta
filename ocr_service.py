@@ -1,18 +1,18 @@
 from __future__ import annotations
-import sys
 import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 import fitz
+
 try:
     import paddle
 except Exception:
     paddle = None
 from paddleocr import PaddleOCR
-from metadata_extraction import Config
+
 
 @contextmanager
 def time_block(name: str, progress_callback: Callable[[str], None] | None = None):
@@ -25,6 +25,7 @@ def time_block(name: str, progress_callback: Callable[[str], None] | None = None
     else:
         print(message)
 
+
 def _as_float_pair(value: Any) -> list[float] | None:
     """Convert a PaddleOCR point-like value to [x, y]."""
     try:
@@ -33,6 +34,7 @@ def _as_float_pair(value: Any) -> list[float] | None:
     except Exception:
         return None
     return None
+
 
 def _points_from_any(value: Any) -> list[list[float]]:
     """The _points_from_any() function returns points for a polygon based on the
@@ -59,6 +61,7 @@ def _points_from_any(value: Any) -> list[list[float]]:
 
     return []
 
+
 def _bbox_from_points(points: list[list[float]]) -> list[float]:
     """The _bbox_from_points() function returns the bounding box representation
     of the points parameter entered. It returns the leftmost x, the lowest y,
@@ -68,6 +71,7 @@ def _bbox_from_points(points: list[list[float]]) -> list[float]:
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
     return [min(xs), min(ys), max(xs), max(ys)]
+
 
 def first_nonempty_value(*values):
     for value in values:
@@ -82,6 +86,7 @@ def first_nonempty_value(*values):
             pass
         return value
     return None
+
 
 def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
     """The extract_ocr_items() function returns a list of dictionaries
@@ -138,7 +143,9 @@ def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
 
     return items
 
+
 MAX_OCR_IMAGE_SIDE = 3999
+
 
 def _page_ocr_matrix(
     page: fitz.Page, requested_dpi: int, max_side: int = MAX_OCR_IMAGE_SIDE
@@ -154,6 +161,7 @@ def _page_ocr_matrix(
     else:
         scale = requested_scale
     return fitz.Matrix(scale, scale), scale * 72.0
+
 
 def render_pdf_pages_with_info(
     pdf_path: Path, image_dir: Path, dpi: int
@@ -187,6 +195,7 @@ def render_pdf_pages_with_info(
                 }
             )
     return pages
+
 
 def ocr_pdf_with_layout(
     pdf_path: Path,
@@ -238,6 +247,7 @@ def ocr_pdf_with_layout(
 
     return {"text": "\n".join(lines), "pages": ocr_pages}
 
+
 def gpu_is_available() -> bool:
     """Return True when the installed Paddle package can see a CUDA GPU. If both
     paddle's built in is_compiled_with_cuda() function to checks that the paddle
@@ -254,6 +264,7 @@ def gpu_is_available() -> bool:
     except Exception:
         return False
 
+
 def resolve_ocr_device(ocr_device: str = "auto", gpu_device_id: int = 0) -> str:
     """Resolve auto/gpu/cpu into the device string PaddleOCR should use. Both
     gpu and cpu are selected when the ocr_device parameter is set to them
@@ -266,6 +277,7 @@ def resolve_ocr_device(ocr_device: str = "auto", gpu_device_id: int = 0) -> str:
     if requested == "cpu":
         return "cpu"
     return f"gpu:{int(gpu_device_id or 0)}" if gpu_is_available() else "cpu"
+
 
 def make_ocr(
     lang: str = "en",
@@ -332,6 +344,7 @@ def make_ocr(
         raise last_error
     return PaddleOCR(**base_kwargs)
 
+
 def _init_ocr_worker(
     lang: str, cpu_threads: int, ocr_device: str, gpu_device_id: int
 ) -> None:
@@ -342,6 +355,7 @@ def _init_ocr_worker(
         ocr_device=ocr_device,
         gpu_device_id=gpu_device_id,
     )
+
 
 def _ocr_one_pdf_worker(
     index: int, pdf_path_text: str, dpi: int
@@ -357,6 +371,7 @@ def _ocr_one_pdf_worker(
         "ocr_text": f"{pdf_path.stem}\n{full_text}",
         "ocr_pages": full_ocr["pages"],
     }
+
 
 def ocr_pdf_batch(
     pdf_paths: list[Path],

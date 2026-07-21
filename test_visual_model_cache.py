@@ -1,4 +1,5 @@
 """Small self-contained test for the visual-classifier joblib cache."""
+
 from __future__ import annotations
 
 import tempfile
@@ -29,7 +30,9 @@ def main() -> None:
         joblib.dump(second_object, model_path)
 
         loaded_c = _get_cached_model(model_path)
-        assert loaded_c == second_object, "Replacing the model should invalidate by mtime."
+        assert loaded_c == second_object, (
+            "Replacing the model should invalidate by mtime."
+        )
         assert loaded_c is not loaded_a
 
     print("Visual classifier model-cache test passed.")

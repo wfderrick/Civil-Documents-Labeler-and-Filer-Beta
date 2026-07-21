@@ -3,10 +3,12 @@ import json
 from pathlib import Path
 from typing import Any
 from metadata_extraction import load_config
+
 APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / ".review_state" / "documents.json"
 DEFAULT_CONFIG_PATH = APP_DIR / "config.json"
 DEFAULT_STATE: dict[str, Any] = {"settings": {}, "documents": []}
+
 
 def read_state() -> dict[str, Any]:
     """The read_state() function returns all of the current settings and
@@ -19,6 +21,7 @@ def read_state() -> dict[str, Any]:
     with STATE_FILE.open("r", encoding="utf-8") as state_file:
         return json.load(state_file)
 
+
 def write_state(state: dict[str, Any]) -> None:
     """The write_state() function updates the documents.json file with current
     settings and document metadata. It begins by ensuring the parent directory
@@ -29,6 +32,7 @@ def write_state(state: dict[str, Any]) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with STATE_FILE.open("w", encoding="utf-8") as state_file:
         json.dump(state, state_file, indent=2)
+
 
 def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
     """The update_output_folder_setting() function sets the output folder in the
@@ -42,9 +46,8 @@ def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
     state.setdefault("settings", {})["output_folder"] = str(output_folder)
     return output_folder
 
+
 def load_config_from_state(state: dict[str, Any]) -> dict[str, Any]:
     settings = state.get("settings", {})
-    config_path = Path(
-        settings.get("config_path") or DEFAULT_CONFIG_PATH
-    ).resolve()
+    config_path = Path(settings.get("config_path") or DEFAULT_CONFIG_PATH).resolve()
     return load_config(config_path if config_path.exists() else None)
