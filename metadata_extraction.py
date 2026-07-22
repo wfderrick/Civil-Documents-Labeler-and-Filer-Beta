@@ -74,7 +74,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "Wall Check": ["wall check", "wallcheck", "wall chk", "foundation check"],
         "Plat/Replat": [
             "forest conservation amendment plat",
-            "sewage easement plat",
             "replat",
             "re plat",
         ],
@@ -82,9 +81,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "Field Notes": ["field notes", "fieldnotes", "field note", "notes"],
     },
     "document_type_regex_rules": {
+        "Site Plan": [
+            r"\bsite\s+plan\b[\s\S]{0,160}?\beasement\s+plat\b",
+            r"\b(?:sewage|drainage|utility|access|ingress|egress|storm\s*drain|water|sanitary)\s+easement\s+plat\b",
+        ],
         "Plat/Replat": [
             r"\bforest\s+conservation\s+amendment\s+plat\b",
-            r"\bsewage\s+easement\s+plat\b",
         ],
         "Construction Permit": [r"\bseptic\s+construction\s+permit\b"],
     },
@@ -324,9 +326,31 @@ def best_keyword_window(keyword: str, normalized_text: str) -> tuple[float, int,
 
 
 def regex_document_type(text: str, rules: Any) -> FuzzyMatch | None:
-    """Return a normalized document type for an explicit regex rule match."""
+    """Return a normalized document type for an explicit regex rule match.
+
+    Site Plan takes precedence when the title contains both ``site plan`` and
+    ``easement plat``. Without this guard, the earlier Plat/Replat rule for an
+    easement plat can win before the Site Plan rule is evaluated.
+    """
     if not isinstance(rules, Mapping):
         return None
+
+    site_plan_easement = re.search(
+        r"\bsite\s+plan\b[\s\S]{0,160}?\beasement\s+plat\b"
+        r"|\beasement\s+plat\b[\s\S]{0,160}?\bsite\s+plan\b",
+        text or "",
+        flags=re.IGNORECASE,
+    )
+    if site_plan_easement:
+        return FuzzyMatch(
+            label="Site Plan",
+            score=1.0,
+            start=site_plan_easement.start(),
+            end=site_plan_easement.end(),
+            matched_text=site_plan_easement.group(0),
+            keyword="site plan + easement plat precedence",
+        )
+
     for label, patterns in rules.items():
         for pattern in patterns or []:
             match = re.search(str(pattern), text or "", flags=re.IGNORECASE)

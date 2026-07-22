@@ -51,7 +51,10 @@
       "site plan",
       "siteplan",
       "plot plan",
-      "sitemap"
+      "sitemap",
+      "sewage easement plat",
+      "easement plat",
+      "site plan easement plat"
     ],
     "Wall Check": [
       "wall check",
@@ -61,7 +64,6 @@
     ],
     "Plat/Replat": [
       "forest conservation amendment plat",
-      "sewage easement plat",
       "replatting",
       "replat",
       "re plat"
@@ -99,6 +101,10 @@
     ],
     "Construction Permit": [
       "\\bseptic\\s+construction\\s+permit\\b"
+    ],
+    "Site Plan": [
+      "\\b(?:sewage|drainage|utility|access|ingress|egress|storm\\s*drain|water|sanitary)\\s+easement\\s+plat\\b",
+      "\\bsite\\s+plan\\s+.*\\beasement\\s+plat\\b"
     ]
   }
 }
