@@ -77,7 +77,7 @@ def api_error(message: str, status_code: int = 500):
 def json_payload() -> dict[str, Any]:
     """The json_payload() function returns the fields given in the body of the
     POST or PATCH request from the browser these include scan settings and
-    document metadata. This is done using the build in get_json() function for
+    document metadata. This is done using the built in get_json() function for
     the request object imported from Flask.
     """
     return request.get_json(force=True) or {}
@@ -117,6 +117,7 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
         ).strip(),
         "project_code": (payload.get("project_code") or "").strip(),
         "project_code_override": (payload.get("project_code") or "").strip(),
+        "county": (payload.get("county") or "Frederick").strip(),
         "document_type": "Field Notes",
         "lang": "en",
         "dpi": int(payload.get("dpi") or 300),
@@ -535,6 +536,8 @@ def api_scan():
     detected_project_code, detected_section = _folder_project_and_section(
         output_folder
     )
+    config["default_county"] = settings.get("county", "")
+
     settings["section"] = detected_section
 
     # Attempts to get a manually entered project code from the current settings.
@@ -613,6 +616,10 @@ def api_scan():
 
 @app.patch("/api/documents/<document_id>")
 def api_update_document(document_id: str):
+    """The api_update_document() function returns a Response object with the
+    updated settings and document matching ``document_id`` which was updated and
+    is now stored in documents.json. First the payload from the PATCH request is
+    extracted via the ``json_payload()`` function. """
     payload = json_payload()
     try:
         state, updated = update_document(

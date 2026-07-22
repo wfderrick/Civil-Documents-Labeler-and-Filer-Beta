@@ -7,6 +7,7 @@ const fields = {
   outputFolder: $('outputFolder'),
   configPath: $('configPath'),
   projectCode: $('projectCode'),
+  county: $('county'),
   dpi: $('dpi'),
   ocrDevice: $('ocrDevice'),
   scanMode: $('scanMode'),
@@ -529,6 +530,7 @@ function applyState(data, options = {}) {
   fields.outputFolder.value = state.settings.output_folder || '';
   fields.configPath.value = state.settings.config_path || '';
   fields.projectCode.value = state.settings.project_code_override || state.settings.project_code || '';
+  if (fields.county) fields.county.value = state.settings.county || 'Calvert';
   fields.dpi.value = state.settings.dpi || 300;
   if (fields.ocrDevice) fields.ocrDevice.value = state.settings.ocr_device || 'auto';
   if (fields.scanMode) fields.scanMode.value = state.settings.scan_mode || 'batch';
@@ -573,6 +575,7 @@ function scanPayload() {
     output_folder: fields.outputFolder.value,
     config_path: fields.configPath.value,
     project_code: fields.projectCode.value,
+    county: fields.county ? fields.county.value : 'Frederick',
     dpi: Number(fields.dpi.value),
     ocr_device: fields.ocrDevice ? fields.ocrDevice.value : 'auto',
     scan_mode: fields.scanMode ? fields.scanMode.value : 'batch',

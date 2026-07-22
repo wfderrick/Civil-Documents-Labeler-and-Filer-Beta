@@ -138,12 +138,18 @@ def update_document(
     document_id: str,
     updater: Callable[[dict[str, Any], dict[str, Any]], T],
 ) -> tuple[dict[str, Any], T]:
-    """Update one document against the latest state in a locked transaction.
+    """Update one document against the latest state in a locked transaction. It
+    has a child function named ``update()`` which takes in the current state and then
+    uses the ``updater`` and ``document_id`` parameters to update the state and the
+    document with document_id. It returns the result of calling 
+    ``mutate_state()`` with the ``update()`` function as a parameter.
 
     ``updater`` receives ``(state, document)`` and may mutate either. A
     ``KeyError`` is raised when the document no longer exists.
     """
     def update(latest_state: dict[str, Any]) -> T:
+        """Updates the current state and document matching the document id taken
+        from the parent function ``update_document()``."""
         document = next(
             (
                 item
@@ -181,4 +187,7 @@ def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
 def load_config_from_state(state: dict[str, Any]) -> dict[str, Any]:
     settings = state.get("settings", {})
     config_path = Path(settings.get("config_path") or DEFAULT_CONFIG_PATH).resolve()
-    return load_config(config_path if config_path.exists() else None)
+    config = load_config(config_path if config_path.exists() else None)
+    if settings.get("county"):
+        config["default_county"] = settings["county"]
+    return config
