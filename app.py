@@ -32,12 +32,15 @@ from scan_status import (
     scan_progress_snapshot,
 )
 from state_store import (
+    append_document,
+    clear_documents,
     read_state,
-    update_output_folder_setting,
-    write_state,
+    remove_document,
+    replace_state,
+    update_document,
+    update_output_folder,
 )
 from tracker import append_batch_tracker
-
 
 APP_DIR = Path(__file__).resolve().parent
 STATE_FILE = APP_DIR / ".review_state" / "documents.json"
@@ -69,7 +72,6 @@ def api_error(message: str, status_code: int = 500):
     """The api_error() function returns a Response object and integer holding
     an error message as a json and status code."""
     return jsonify({"error": message}), status_code
-
 
 
 def json_payload() -> dict[str, Any]:
@@ -234,7 +236,6 @@ def scan_batch(
     return documents
 
 
-
 def scan_mass(
     input_folder: Path,
     ocr,
@@ -271,7 +272,9 @@ def scan_mass(
             dpi=settings["dpi"],
             lang=settings["lang"],
             workers=1,
-            threads_per_worker=int(settings.get("ocr_threads_per_worker") or 4),
+            threads_per_worker=int(
+                settings.get("ocr_threads_per_worker") or 4
+            ),
             existing_ocr=ocr,
             ocr_device=settings.get("ocr_device", "auto"),
             gpu_device_id=int(settings.get("gpu_device_id") or 0),
@@ -326,6 +329,7 @@ def scan_mass(
         report(f"Ready for review: {pdf_path.name}")
 
     return documents
+
 
 def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     """The _folder_project_and_section() function returns the project code and
@@ -452,15 +456,12 @@ def api_update_output_folder():
     code. If it succeeds it updates documents.json with the write_state()
     function. Lastly it returns a Response object via the jsonify() function
     with output folder and settings."""
-    state = read_state()
     try:
-        output_folder = update_output_folder_setting(
-            state,
-            (request.get_json(silent=True) or {}).get("output_folder", ""),
+        state, output_folder = update_output_folder(
+            (request.get_json(silent=True) or {}).get("output_folder", "")
         )
     except (OSError, ValueError) as error:
         return api_error(str(error), 400)
-    write_state(state)
     return jsonify(
         {
             "output_folder": str(output_folder),
@@ -475,6 +476,7 @@ def api_scan_progress():
     current total time, active scans, finished scans, failed scans, and messages
     in the _SCAN_PROGRESS dictionary."""
     return jsonify(scan_progress_snapshot())
+
 
 
 @app.post("/api/scan")
@@ -537,8 +539,8 @@ def api_scan():
 
     # Attempts to get a manually entered project code from the current settings.
     # If there is one the letters in it are converted to uppercase and the
-    # override for project code is set to match the manual project code. If there
-    # isn't a manual project code in settings the detected project code is
+    # override for project code is set to match the manual project code. If
+    # there isn't a manual project code in settings the detected project code is
     # entered into settings and the override it set to an empty string.
     manual_project_code = (settings.get("project_code") or "").strip()
     if manual_project_code:
@@ -556,7 +558,8 @@ def api_scan():
         settings["scan_mode"] = scan_mode
 
     # Sequential scans reuse a process-lifetime OCR engine from ocr_service.
-    # Parallel CPU batch workers still initialize one private engine per process.
+    # Parallel CPU batch workers still initialize one private engine per
+    # process.
     use_main_process_engine = (
         scan_mode == "mass"
         or str(settings.get("ocr_device", "auto")).lower() == "gpu"
@@ -578,19 +581,7 @@ def api_scan():
     if scan_mode == "mass":
         # Clear the previous queue immediately. Atomic state writes let the
         # browser safely poll this file while documents are appended.
-        write_state(state)
-
-        def publish_document(document: dict[str, Any]) -> None:
-            # Read the latest persisted state before appending. Review edits may
-            # be saved from another Flask request while OCR continues; writing
-            # the scan request's older in-memory state here would erase them.
-            latest_state = read_state()
-            latest_state["settings"] = settings
-            latest_documents = latest_state.setdefault("documents", [])
-            if not any(item.get("id") == document.get("id") for item in latest_documents):
-                latest_documents.append(document)
-            write_state(latest_state)
-            state["documents"] = latest_documents
+        replace_state(settings=settings, documents=[])
 
         scan_mass(
             input_folder,
@@ -598,7 +589,7 @@ def api_scan():
             config,
             settings,
             progress_callback=add_scan_progress,
-            document_ready_callback=publish_document,
+            document_ready_callback=append_document,
         )
     else:
         state["documents"] = scan_batch(
@@ -611,7 +602,7 @@ def api_scan():
         if settings.get("section"):
             for document in state["documents"]:
                 document["metadata"]["section"] = settings["section"]
-        write_state(state)
+        replace_state(settings=settings, documents=state["documents"])
     final_state = read_state() if scan_mode == "mass" else state
     finish_scan_progress(
         message=f"Scan complete. {len(final_state['documents'])} document(s)\
@@ -622,13 +613,16 @@ def api_scan():
 
 @app.patch("/api/documents/<document_id>")
 def api_update_document(document_id: str):
-    state = read_state()
-    document = find_document(state, document_id)
-    if not document:
+    payload = json_payload()
+    try:
+        state, updated = update_document(
+            document_id,
+            lambda latest_state, document: apply_document_update(
+                latest_state, document, payload
+            ),
+        )
+    except KeyError:
         return api_error("Document not found", 404)
-
-    updated = apply_document_update(state, document, json_payload())
-    write_state(state)
     return jsonify(
         {
             "settings": state.get("settings", {}),
@@ -655,10 +649,9 @@ def api_file_document(document_id: str):
         )
 
     try:
-        output_folder = update_output_folder_setting(
-            state,
+        state, output_folder = update_output_folder(
             payload.get("output_folder")
-            or state.get("settings", {}).get("output_folder", ""),
+            or state.get("settings", {}).get("output_folder", "")
         )
     except (OSError, ValueError) as error:
         return api_error(str(error), 400)
@@ -680,14 +673,7 @@ def api_file_document(document_id: str):
     # A successfully filed document no longer needs review. Re-read the latest
     # state so documents completed by an active mass scan are preserved, remove
     # only the filed document, and persist the shortened review queue.
-    latest_state = read_state()
-    latest_state.setdefault("settings", {}).update(state.get("settings", {}))
-    latest_state["documents"] = [
-        item
-        for item in latest_state.get("documents", [])
-        if item.get("id") != document_id
-    ]
-    write_state(latest_state)
+    latest_state, _ = remove_document(document_id)
     return jsonify(
         {
             "settings": latest_state.get("settings", {}),
@@ -702,10 +688,9 @@ def api_file_all_documents():
     payload = request.get_json(silent=True) or {}
     state = read_state()
     try:
-        output_folder = update_output_folder_setting(
-            state,
+        state, output_folder = update_output_folder(
             payload.get("output_folder")
-            or state.get("settings", {}).get("output_folder", ""),
+            or state.get("settings", {}).get("output_folder", "")
         )
     except (OSError, ValueError) as error:
         return api_error(str(error), 400)
@@ -756,8 +741,7 @@ def api_file_all_documents():
                 send2trash(str(source))
             except Exception:
                 source.unlink(missing_ok=True)
-    state["documents"] = []
-    write_state(state)
+    state = clear_documents()
     return jsonify({"settings": state.get("settings", {}), "documents": []})
 
 

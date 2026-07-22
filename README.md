@@ -57,7 +57,7 @@ training_data/
   not_field_notes/
 ```
 
-Put handwritten field-note PDFs in `field_notes`. Put everything else in `not_field_notes`, including Site Plans, House Locations, Wall Checks, Replats, plats, permits, letters, and random PDFs.
+Put handwritten field-note PDFs in `field_notes`. Put everything else in `not_field_notes`, including Site Plans, House Locations, Wall Checks, Plat/Replats, plats, Construction Permits, letters, and random PDFs.
 
 Recommended minimum:
 

@@ -72,11 +72,24 @@ DEFAULT_CONFIG: dict[str, Any] = {
         ],
         "Site Plan": ["site plan", "siteplan", "plot plan", "sitemap"],
         "Wall Check": ["wall check", "wallcheck", "wall chk", "foundation check"],
+        "Plat/Replat": [
+            "forest conservation amendment plat",
+            "sewage easement plat",
+            "replat",
+            "re plat",
+        ],
+        "Construction Permit": ["septic construction permit", "construction permit"],
         "Field Notes": ["field notes", "fieldnotes", "field note", "notes"],
-        "Replat": ["replat", "re plat"],
+    },
+    "document_type_regex_rules": {
+        "Plat/Replat": [
+            r"\bforest\s+conservation\s+amendment\s+plat\b",
+            r"\bsewage\s+easement\s+plat\b",
+        ],
+        "Construction Permit": [r"\bseptic\s+construction\s+permit\b"],
     },
     "document_type_patterns": [
-        r"\s(wall check|site plan|field notes|replat|house location)\s"
+        r"\s(wall check|site plan|field notes|replat|house location|construction permit)\s"
     ],
 }
 
@@ -310,6 +323,25 @@ def best_keyword_window(keyword: str, normalized_text: str) -> tuple[float, int,
     return best_score, best_start, best_end
 
 
+def regex_document_type(text: str, rules: Any) -> FuzzyMatch | None:
+    """Return a normalized document type for an explicit regex rule match."""
+    if not isinstance(rules, Mapping):
+        return None
+    for label, patterns in rules.items():
+        for pattern in patterns or []:
+            match = re.search(str(pattern), text or "", flags=re.IGNORECASE)
+            if match:
+                return FuzzyMatch(
+                    label=str(label),
+                    score=1.0,
+                    start=match.start(),
+                    end=match.end(),
+                    matched_text=match.group(0),
+                    keyword=str(pattern),
+                )
+    return None
+
+
 def fuzzy_document_type(
     text: str, keywords: Any, threshold: float = DOCUMENT_TYPE_THRESHOLD
 ) -> FuzzyMatch | None:
@@ -529,7 +561,9 @@ def extract_metadata(
             tax_id=tax_id,
         )
 
-    doc_match = fuzzy_document_type(text, config.get("document_type_keywords"))
+    doc_match = regex_document_type(text, config.get("document_type_regex_rules"))
+    if doc_match is None:
+        doc_match = fuzzy_document_type(text, config.get("document_type_keywords"))
     document_type = (
         doc_match.label
         if doc_match
@@ -562,7 +596,9 @@ def extract_metadata(
             or default_project_code,
             "Project",
         ),
-        document_type=safe_path_part(document_type, "Field Notes"),
+        # Keep the UI classification label intact. Filename creation sanitizes
+        # path-invalid characters separately in document_service.suggested_filename().
+        document_type=normalize_value(document_type) or "Field Notes",
         tax_map=safe_path_part(tax_map, "") if tax_map else "",
         parcel=safe_path_part(parcel, "") if parcel else "",
         tax_id=safe_path_part(tax_id, "") if tax_id else "",

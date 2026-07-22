@@ -398,54 +398,6 @@ function suggestedDocumentLabel(item) {
   return `${type} - ${lot}`;
 }
 
-function batchWarnings() {
-  const warnings = [];
-  const documents = (state.documents || []).filter((document) => !document.is_lookup_document);
-  const context = buildValidationContext(documents);
-  const reportedDuplicateTypes = new Set();
-
-  documents.forEach((document) => {
-    const validation = getDocumentValidationState(document, context);
-    const label = suggestedDocumentLabel(document);
-
-    if (validation.duplicateType) {
-      const duplicateKey = validation.duplicateType.toLowerCase();
-      if (!reportedDuplicateTypes.has(duplicateKey)) {
-        const matching = documents
-          .filter((candidate) => documentTypeValue(candidate).toLowerCase() === duplicateKey)
-          .map((candidate) => suggestedDocumentLabel(candidate));
-        warnings.push(`Duplicate document type “${validation.duplicateType}”: ${matching.join(', ')}`);
-        reportedDuplicateTypes.add(duplicateKey);
-      }
-    }
-
-    if (validation.missingFields.length) {
-      warnings.push(`${label}: missing ${validation.missingFields.map(({ label: fieldLabel }) => fieldLabel).join(', ')}`);
-    }
-    validation.warnings.forEach((message) => warnings.push(`${label}: ${message}`));
-    validation.errors.forEach((message) => warnings.push(`${label}: ${message}`));
-  });
-
-  return warnings;
-}
-
-function renderBatchWarnings() {
-  const banner = $('batchWarning');
-  if (!banner) return;
-  const warnings = batchWarnings();
-  if (!warnings.length) {
-    banner.classList.add('hidden');
-    banner.innerHTML = '';
-    return;
-  }
-  const visibleWarnings = warnings.slice(0, 3);
-  const warningSummary = warnings.length > visibleWarnings.length
-    ? `Showing ${visibleWarnings.length} of ${warnings.length} issues`
-    : `${warnings.length} issue${warnings.length === 1 ? '' : 's'}`;
-  banner.innerHTML = `<div class="batch-warning-heading"><strong>Batch needs attention</strong><span>${warningSummary}</span></div><ul>${visibleWarnings.map((item) => `<li>${item}</li>`).join('')}</ul>`;
-  banner.classList.remove('hidden');
-}
-
 function renderList() {
   const list = $('documentList');
   list.innerHTML = '';
@@ -584,8 +536,6 @@ function applyState(data, options = {}) {
   if (!state.documents.some((document) => document.id === state.selectedId)) {
     state.selectedId = state.documents[0]?.id || null;
   }
-
-  renderBatchWarnings();
 
   // During a live mass scan, state polling should refresh the queue and warning
   // summary without replacing values the reviewer is currently typing. The

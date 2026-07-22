@@ -59,10 +59,16 @@
       "wall chk",
       "foundation check"
     ],
-    "Replat": [
+    "Plat/Replat": [
+      "forest conservation amendment plat",
+      "sewage easement plat",
       "replatting",
       "replat",
       "re plat"
+    ],
+    "Construction Permit": [
+      "septic construction permit",
+      "construction permit"
     ],
     "Field Notes": [
       "field notes",
@@ -72,7 +78,7 @@
     ]
   },
   "document_type_patterns": [
-    "\\s(wall check|site plan|field notes|replat|house location)\\s"
+    "\\s(wall check|site plan|field notes|replat|house location|construction permit)\\s"
   ],
   "parallel_ocr": false,
   "ocr_workers": 1,
@@ -85,5 +91,14 @@
     "\\btax\\s*(?:id|i\\.?d\\.?|1\\.?d\\.?)\\s*[:#.-]?\\s*([0-9Oo]{1,2})\\s*[- ]\\s*([0-9OoIl]{4,8})\\b"
   ],
   "default_document_type": "Field Notes",
-  "lookup_document_type": "Lookup Only"
+  "lookup_document_type": "Lookup Only",
+  "document_type_regex_rules": {
+    "Plat/Replat": [
+      "\\bforest\\s+conservation\\s+amendment\\s+plat\\b",
+      "\\bsewage\\s+easement\\s+plat\\b"
+    ],
+    "Construction Permit": [
+      "\\bseptic\\s+construction\\s+permit\\b"
+    ]
+  }
 }
