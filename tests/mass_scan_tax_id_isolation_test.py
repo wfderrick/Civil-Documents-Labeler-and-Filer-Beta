@@ -6,12 +6,12 @@ from sdat import SDAT_FIELDS
 
 def record(number: str, street: str, account: str) -> dict[str, str]:
     """Record.
-    
+
     Args:
         number: Input used by this operation.
         street: Input used by this operation.
         account: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -27,8 +27,7 @@ def record(number: str, street: str, account: str) -> dict[str, str]:
 
 
 def main() -> None:
-    """Run the module as a command-line entry point.
-    """
+    """Run the module as a command-line entry point."""
     unique = [record("123", "MAIN", "111111")]
     assert _confident_unique_address_record("123 Main Rd", unique) is unique[0]
 
@@ -42,8 +41,6 @@ def main() -> None:
 
     unrelated = [record("987", "OTHER", "333333")]
     assert _confident_unique_address_record("123 Main Rd", unrelated) is None
-
-    print("Mass Scan Tax ID isolation tests passed.")
 
 
 if __name__ == "__main__":

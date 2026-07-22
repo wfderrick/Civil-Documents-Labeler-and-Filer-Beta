@@ -37,8 +37,6 @@ def main() -> None:
         )
         assert loaded_c is not loaded_a
 
-    print("Visual classifier model-cache test passed.")
-
 
 if __name__ == "__main__":
     main()
