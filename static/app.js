@@ -1,3 +1,12 @@
+/**
+ * Browser-side controller for the COABarrett document review application.
+ *
+ * Responsibilities include loading server state, rendering the queue and review
+ * form, managing the PDF viewer, validating metadata, polling scan progress, and
+ * sending explicit user edits or filing commands back to Flask. Keep DOM-only
+ * concerns here; extraction and file-system behavior belong in Python services.
+ */
+
 const state = { documents: [], settings: {}, selectedId: null };
 
 const $ = (id) => document.getElementById(id);
@@ -45,6 +54,9 @@ let scanStartedAt = null;
 let renderedProgressCount = 0;
 let liveStateTimer = null;
 
+/**
+ * resetScanProgressPanel. This helper is kept small so UI state changes remain traceable.
+ */
 function resetScanProgressPanel() {
   const panel = $('scanProgressPanel');
   panel.classList.remove('hidden', 'failed');
@@ -54,6 +66,11 @@ function resetScanProgressPanel() {
   renderedProgressCount = 0;
 }
 
+/**
+ * renderScanProgress. This helper is kept small so UI state changes remain traceable.
+ * @param {*} data Value supplied by the caller.
+ * @returns {*} Computed value or asynchronous result used by the interface.
+ */
 function renderScanProgress(data) {
   const panel = $('scanProgressPanel');
   panel.classList.toggle('failed', Boolean(data.failed));
@@ -85,6 +102,9 @@ function renderScanProgress(data) {
   container.scrollTop = container.scrollHeight;
 }
 
+/**
+ * pollScanProgress. This helper is kept small so UI state changes remain traceable.
+ */
 async function pollScanProgress() {
   try {
     renderScanProgress(await requestJson('/api/scan-progress'));
@@ -93,6 +113,9 @@ async function pollScanProgress() {
   }
 }
 
+/**
+ * updateLocalScanElapsed. This helper is kept small so UI state changes remain traceable.
+ */
 function updateLocalScanElapsed() {
   if (scanStartedAt === null) return;
 
@@ -103,6 +126,9 @@ function updateLocalScanElapsed() {
   $('scanElapsed').textContent = `${elapsedSeconds.toFixed(1)} s`;
 }
 
+/**
+ * startScanProgressPolling. This helper is kept small so UI state changes remain traceable.
+ */
 function startScanProgressPolling() {
   resetScanProgressPanel();
 
@@ -119,6 +145,10 @@ function startScanProgressPolling() {
   scanElapsedTimer = setInterval(updateLocalScanElapsed, 100);
 }
 
+/**
+ * stopScanProgressPolling. This helper is kept small so UI state changes remain traceable.
+ * @param {*} { failed Value supplied by the caller.
+ */
 async function stopScanProgressPolling({ failed = false } = {}) {
   clearInterval(scanProgressTimer);
   clearInterval(scanElapsedTimer);
@@ -134,6 +164,11 @@ async function stopScanProgressPolling({ failed = false } = {}) {
   setTimeout(() => $('scanProgressPanel').classList.add('hidden'), failed ? 0 : 0);
 }
 
+/**
+ * openFolderBrowser. This helper is kept small so UI state changes remain traceable.
+ * @param {*} targetFieldId Value supplied by the caller.
+ * @param {*} startPath Value supplied by the caller.
+ */
 async function openFolderBrowser(targetFieldId, startPath = '') {
   const browser = folderBrowserElements[targetFieldId];
   if (!browser) return;
@@ -147,12 +182,21 @@ async function openFolderBrowser(targetFieldId, startPath = '') {
   browser.panel.classList.remove('hidden');
 }
 
+/**
+ * closeFolderBrowser. This helper is kept small so UI state changes remain traceable.
+ * @param {*} targetFieldId Value supplied by the caller.
+ */
 function closeFolderBrowser(targetFieldId) {
   const browser = folderBrowserElements[targetFieldId];
   if (browser) browser.panel.classList.add('hidden');
   if (browseTargetField === targetFieldId) browseTargetField = null;
 }
 
+/**
+ * loadBrowseFolder. This helper is kept small so UI state changes remain traceable.
+ * @param {*} path Value supplied by the caller.
+ * @param {*} targetFieldId Value supplied by the caller.
+ */
 async function loadBrowseFolder(path, targetFieldId = browseTargetField) {
   const browser = folderBrowserElements[targetFieldId];
   if (!browser) return;
@@ -194,6 +238,11 @@ async function loadBrowseFolder(path, targetFieldId = browseTargetField) {
   };
 }
 
+/**
+ * showToast. This helper is kept small so UI state changes remain traceable.
+ * @param {*} message Value supplied by the caller.
+ * @param {*} isError Value supplied by the caller.
+ */
 function showToast(message, isError = false) {
   const toast = $('toast');
   toast.textContent = message;
@@ -207,6 +256,12 @@ using the fetch() function processes the returned data from the given url. This
 function makes a GET /api/state request to the Flask object which then calls the 
 api_state() function in app.py to return a Response object as a json file 
 holding the current settings and document metadata. */
+/**
+ * requestJson. This helper is kept small so UI state changes remain traceable.
+ * @param {*} url Value supplied by the caller.
+ * @param {*} options Value supplied by the caller.
+ * @returns {*} Computed value or asynchronous result used by the interface.
+ */
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
     headers: { 'Content-Type': 'application/json' },
@@ -228,6 +283,11 @@ the bodytext parameter. The function first checks that bodytext is valid and
 then trys to parse it as a JSON using the JSON.parse() function. If successful 
 the object returned by the parse() function is returned otherwise an error is 
 thrown.*/
+/**
+ * parseJsonResponse. This helper is kept small so UI state changes remain traceable.
+ * @param {*} bodyText Value supplied by the caller.
+ * @param {*} response Value supplied by the caller.
+ */
 function parseJsonResponse(bodyText, response) {
   if (!bodyText) return null;
 
@@ -250,10 +310,17 @@ function statusLabel(document) {
 in the state object that has the same id as the id stored in the selectedId 
 property in the state object. It uses the find() function which returns the 
 first value in an array for which the predicate is true.*/
+/**
+ * selectedDocument. This helper is kept small so UI state changes remain traceable.
+ */
 function selectedDocument() {
   return state.documents.find((document) => document.id === state.selectedId);
 }
 
+/**
+ * replaceDocument. This helper is kept small so UI state changes remain traceable.
+ * @param {*} updatedDocument Value supplied by the caller.
+ */
 function replaceDocument(updatedDocument) {
   const index = state.documents.findIndex((document) => document.id === updatedDocument.id);
   if (index >= 0) state.documents[index] = updatedDocument;
@@ -266,6 +333,13 @@ function replaceDocument(updatedDocument) {
  * initiated by the button is currently happening or the ready text meaning the 
  * process has either not been started or it's finished. 
 */
+/**
+ * setButtonLoading. This helper is kept small so UI state changes remain traceable.
+ * @param {*} button Value supplied by the caller.
+ * @param {*} isLoading Value supplied by the caller.
+ * @param {*} loadingText Value supplied by the caller.
+ * @param {*} readyText Value supplied by the caller.
+ */
 function setButtonLoading(button, isLoading, loadingText, readyText) {
   button.disabled = isLoading;
   button.textContent = isLoading ? loadingText : readyText;
@@ -285,6 +359,12 @@ const REQUIRED_METADATA_FIELDS = [
   { key: 'tax_id', label: 'Tax ID' },
 ];
 
+/**
+ * isMissingMetadataValue. This helper is kept small so UI state changes remain traceable.
+ * @param {*} key Value supplied by the caller.
+ * @param {*} value Value supplied by the caller.
+ * @returns {*} Computed value or asynchronous result used by the interface.
+ */
 function isMissingMetadataValue(key, value) {
   const normalized = String(value ?? '').trim();
   if (!normalized) return true;
@@ -296,6 +376,11 @@ function isMissingMetadataValue(key, value) {
   return false;
 }
 
+/**
+ * normalizeIssueMessages. This helper is kept small so UI state changes remain traceable.
+ * @param {*} value Value supplied by the caller.
+ * @returns {*} Computed value or asynchronous result used by the interface.
+ */
 function normalizeIssueMessages(value) {
   if (!value) return [];
   if (Array.isArray(value)) {
@@ -312,10 +397,19 @@ function normalizeIssueMessages(value) {
   return message ? [message] : [];
 }
 
+/**
+ * documentTypeValue. This helper is kept small so UI state changes remain traceable.
+ * @param {*} document Value supplied by the caller.
+ */
 function documentTypeValue(document) {
   return String(document?.metadata?.document_type || '').trim();
 }
 
+/**
+ * buildValidationContext. This helper is kept small so UI state changes remain traceable.
+ * @param {*} documents Value supplied by the caller.
+ * @returns {*} Computed value or asynchronous result used by the interface.
+ */
 function buildValidationContext(documents = state.documents || []) {
   const duplicateIds = new Set();
   const duplicateTypesById = new Map();
@@ -391,6 +485,10 @@ function getDocumentValidationState(document, context = buildValidationContext()
   };
 }
 
+/**
+ * suggestedDocumentLabel. This helper is kept small so UI state changes remain traceable.
+ * @param {*} item Value supplied by the caller.
+ */
 function suggestedDocumentLabel(item) {
   const rawType = String(item.metadata?.document_type || '').trim();
   const rawLot = String(item.metadata?.lot || '').trim();
@@ -399,6 +497,10 @@ function suggestedDocumentLabel(item) {
   return `${type} - ${lot}`;
 }
 
+/**
+ * renderList. This helper is kept small so UI state changes remain traceable.
+ * @returns {*} Computed value or asynchronous result used by the interface.
+ */
 function renderList() {
   const list = $('documentList');
   list.innerHTML = '';
@@ -441,6 +543,11 @@ updated with the source_name field in the document parameter. The documentStatus
 <div> is updated with the statusLabel() function with a nice version of the 
 documents current status. Each field is updated with the document parameter's
 metadata.*/
+/**
+ * renderMissingMetadataHighlights. This helper is kept small so UI state changes remain traceable.
+ * @param {*} document Value supplied by the caller.
+ * @returns {*} Computed value or asynchronous result used by the interface.
+ */
 function renderMissingMetadataHighlights(document) {
   const validation = getDocumentValidationState(document, buildValidationContext());
   const ids = {
@@ -459,6 +566,11 @@ function renderMissingMetadataHighlights(document) {
   });
 }
 
+/**
+ * renderSelectedDocument. This helper is kept small so UI state changes remain traceable.
+ * @param {*} document Value supplied by the caller.
+ * @returns {*} Computed value or asynchronous result used by the interface.
+ */
 function renderSelectedDocument(document) {
   $('emptyState').classList.add('hidden');
   $('reviewPane').classList.remove('hidden');
@@ -501,6 +613,10 @@ selectedId. renderList() updates the button for the selected document to have
 the active class which changes its appearance so you can tell which document is
 selected. renderSelectedDocument() displays the document as a pdf and the review 
 panel for editing the document information.*/
+/**
+ * selectDocument. This helper is kept small so UI state changes remain traceable.
+ * @param {*} id Value supplied by the caller.
+ */
 function selectDocument(id) {
   state.selectedId = id;
   const document = selectedDocument();
@@ -522,6 +638,11 @@ function selectDocument(id) {
  * property, displays the document as a pdf and shows the review panel. 
  * Otherwise page is rendered with no documents.
 */
+/**
+ * applyState. This helper is kept small so UI state changes remain traceable.
+ * @param {*} data Value supplied by the caller.
+ * @param {*} options Value supplied by the caller.
+ */
 function applyState(data, options = {}) {
   state.documents = data.documents || [];
   state.settings = data.settings || {};
@@ -554,6 +675,9 @@ function applyState(data, options = {}) {
     renderList();
 }
 
+/**
+ * saveOutputFolder. This helper is kept small so UI state changes remain traceable.
+ */
 async function saveOutputFolder() {
   const data = await requestJson('/api/settings/output-folder', {
     method: 'PATCH',
@@ -569,6 +693,9 @@ async function saveOutputFolder() {
  * ouput folder, config path, project code, dpi, and ocr device. These are taken
  * from the current html fields for each.
 */
+/**
+ * scanPayload. This helper is kept small so UI state changes remain traceable.
+ */
 function scanPayload() {
   return {
     input_folder: fields.inputFolder.value,
@@ -582,6 +709,12 @@ function scanPayload() {
   };
 }
 
+/**
+ * updatePayload. This helper is kept small so UI state changes remain traceable.
+ * @param {*} autoFolder Value supplied by the caller.
+ * @param {*} autoFileName Value supplied by the caller.
+ * @param {*} changedField Value supplied by the caller.
+ */
 function updatePayload(autoFolder = false, autoFileName = false, changedField = '') {
   return {
     lot: fields.lot.value,
@@ -610,6 +743,9 @@ function updatePayload(autoFolder = false, autoFileName = false, changedField = 
  * state in app.js along with adding the visual changes of the document buttons,
  * warning banner, document pdf, and review panel.
 */
+/**
+ * loadState. This helper is kept small so UI state changes remain traceable.
+ */
 async function loadState() {
   applyState(await requestJson('/api/state'));
 }
@@ -629,17 +765,26 @@ async function pollLiveScanState() {
   }
 }
 
+/**
+ * startLiveStatePolling. This helper is kept small so UI state changes remain traceable.
+ */
 function startLiveStatePolling() {
   clearInterval(liveStateTimer);
   pollLiveScanState();
   liveStateTimer = setInterval(pollLiveScanState, 500);
 }
 
+/**
+ * stopLiveStatePolling. This helper is kept small so UI state changes remain traceable.
+ */
 function stopLiveStatePolling() {
   clearInterval(liveStateTimer);
   liveStateTimer = null;
 }
 
+/**
+ * scan. This helper is kept small so UI state changes remain traceable.
+ */
 async function scan() {
   const button = $('scanButton');
   const payload = scanPayload();
@@ -666,6 +811,12 @@ async function scan() {
   }
 }
 
+/**
+ * saveCurrent. This helper is kept small so UI state changes remain traceable.
+ * @param {*} autoFolder Value supplied by the caller.
+ * @param {*} autoFileName Value supplied by the caller.
+ * @param {*} changedField Value supplied by the caller.
+ */
 async function saveCurrent(autoFolder = false, autoFileName = false, changedField = '') {
   const document = selectedDocument();
   if (!document) return null;
@@ -685,6 +836,9 @@ async function saveCurrent(autoFolder = false, autoFileName = false, changedFiel
   return updated;
 }
 
+/**
+ * fileCurrent. This helper is kept small so UI state changes remain traceable.
+ */
 async function fileCurrent() {
   const document = await saveCurrent(false, false);
   if (!document) return;
@@ -711,6 +865,9 @@ async function fileCurrent() {
   }
 }
 
+/**
+ * fileAll. This helper is kept small so UI state changes remain traceable.
+ */
 async function fileAll() {
   const button = $('fileAllButton');
   setButtonLoading(button, true, 'Filing...', 'File Batch');
@@ -736,11 +893,21 @@ async function fileAll() {
   }
 }
 
+/**
+ * metadataFieldName. This helper is kept small so UI state changes remain traceable.
+ * @param {*} id Value supplied by the caller.
+ */
 function metadataFieldName(id) {
   const names = { taxMap: 'tax_map', taxId: 'tax_id', editProjectCode: 'project_code', editDocumentType: 'document_type' };
   return names[id] || id;
 }
 
+/**
+ * registerAutoSave. This helper is kept small so UI state changes remain traceable.
+ * @param {*} ids Value supplied by the caller.
+ * @param {*} autoFolder Value supplied by the caller.
+ * @param {*} autoFileName Value supplied by the caller.
+ */
 function registerAutoSave(ids, autoFolder, autoFileName) {
   ids.forEach((id) => {
     const element = $(id);

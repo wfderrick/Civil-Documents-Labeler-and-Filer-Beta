@@ -1,3 +1,11 @@
+"""Output-change tracking helpers used to record files created, moved, or renamed by the application.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 import csv
 from datetime import datetime

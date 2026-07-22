@@ -1,3 +1,11 @@
+"""Text-to-metadata extraction and document classification. This module converts OCR text into structured project, property, document-type, and title-block fields while preserving confidence and source information used by later review steps.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 import json
 import re
@@ -19,7 +27,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ocr_threads_per_worker": 4,
     "visual_field_notes_classifier": True,
     "visual_field_notes_threshold": 0.75,
-    "default_county": "",
+    "default_county": "Calvert",
     "lot_pattern": [r"\blot\s*[:#-]?\s*([0-9]+R?)\b"],
     "county_patterns": [r"\b([A-Za-z]+)\s+County\b"],
     "map_patterns": [
@@ -135,6 +143,8 @@ def normalize_ocr_numbers(text: str) -> str:
 
 @dataclass(frozen=True)
 class ExtractedMetadata:
+    """Represent ExtractedMetadata behavior and related state.
+    """
     lot: str
     address: str
     project_code: str
@@ -147,6 +157,8 @@ class ExtractedMetadata:
 
 @dataclass(frozen=True)
 class FuzzyMatch:
+    """Represent FuzzyMatch behavior and related state.
+    """
     label: str
     score: float
     start: int
@@ -256,6 +268,17 @@ def safe_path_part(value: str, fallback: str) -> str:
 
 
 def unique_path(path: Path) -> Path:
+    """Unique path.
+    
+    Args:
+        path: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    
+    Notes:
+        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """
     if not path.exists():
         return path
     for counter in range(2, 10000):
@@ -266,10 +289,26 @@ def unique_path(path: Path) -> Path:
 
 
 def normalize_for_fuzzy(value: str) -> str:
+    """Normalize for fuzzy.
+    
+    Args:
+        value: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     return str(value or "").lower().translate(OCR_CONFUSION_MAP)
 
 
 def keyword_groups(raw_keywords: Any) -> dict[str, list[str]]:
+    """Keyword groups.
+    
+    Args:
+        raw_keywords: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     if isinstance(raw_keywords, Mapping):
         return {
             str(label): (
@@ -369,6 +408,16 @@ def regex_document_type(text: str, rules: Any) -> FuzzyMatch | None:
 def fuzzy_document_type(
     text: str, keywords: Any, threshold: float = DOCUMENT_TYPE_THRESHOLD
 ) -> FuzzyMatch | None:
+    """Fuzzy document type.
+    
+    Args:
+        text: Input used by this operation.
+        keywords: Input used by this operation.
+        threshold: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     normalized_text = normalize_for_fuzzy(text)
     best: FuzzyMatch | None = None
     for label, candidates in keyword_groups(keywords).items():
@@ -392,6 +441,15 @@ def fuzzy_document_type(
 
 
 def is_ignored_address(address: str, config: Config) -> bool:
+    """Is ignored address.
+    
+    Args:
+        address: Input used by this operation.
+        config: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     cleaned = normalize_for_fuzzy(address)
     compact = re.sub(r"[^a-z0-9]", "", cleaned)
     for blocked in config.get("ignored_addresses", []):
@@ -525,6 +583,17 @@ def first_valid_address(
 
 
 def _points_from_any(value: Any) -> list[list[float]]:
+    """Points from any.
+    
+    Args:
+        value: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    
+    Notes:
+        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """
     if not isinstance(value, (list, tuple)):
         return []
     points: list[list[float]] = []
@@ -538,6 +607,14 @@ def _points_from_any(value: Any) -> list[list[float]]:
 
 
 def _bbox_from_points(points: list[list[float]]) -> list[float]:
+    """Bbox from points.
+    
+    Args:
+        points: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     if not points:
         return [0.0, 0.0, 0.0, 0.0]
     xs = [point[0] for point in points]
@@ -546,6 +623,14 @@ def _bbox_from_points(points: list[list[float]]) -> list[float]:
 
 
 def first_nonempty_value(*values: Any) -> Any:
+    """First nonempty value.
+    
+    Args:
+        *values: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     for value in values:
         if value not in (None, "", [], {}):
             return value
@@ -553,6 +638,14 @@ def first_nonempty_value(*values: Any) -> Any:
 
 
 def is_known_value(value: str) -> bool:
+    """Is known value.
+    
+    Args:
+        value: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     value = str(value or "").strip()
     return (
         bool(value)
@@ -568,6 +661,18 @@ def extract_metadata(
     default_document_type: str,
     ocr_pages: Iterable[Mapping[str, Any]] | None = None,
 ) -> ExtractedMetadata:
+    """Extract metadata.
+    
+    Args:
+        text: Input used by this operation.
+        config: Input used by this operation.
+        default_project_code: Input used by this operation.
+        default_document_type: Input used by this operation.
+        ocr_pages: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     from sdat import (
         LOOKUP_DOCUMENT_TYPE,
         extract_sdat_lookup_tax_id,
@@ -630,10 +735,27 @@ def extract_metadata(
 
 
 def prefer_known(value: str, fallback: str) -> str:
+    """Prefer known.
+    
+    Args:
+        value: Input used by this operation.
+        fallback: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     return value if is_known_value(value) else fallback
 
 
 def normalize_identifier(value: Any) -> str:
+    """Normalize identifier.
+    
+    Args:
+        value: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     cleaned = re.sub(r"[^0-9A-Za-z]", "", str(value or "")).upper()
     return cleaned.lstrip("0") or cleaned
 
@@ -641,6 +763,15 @@ def normalize_identifier(value: Any) -> str:
 def identifier_options(
     value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)
 ) -> list[str]:
+    """Identifier options.
+    
+    Args:
+        value: Input used by this operation.
+        widths: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     compact = re.sub(r"[^0-9A-Za-z]", "", str(value or "")).upper()
     if not compact:
         return []

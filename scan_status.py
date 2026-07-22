@@ -1,3 +1,11 @@
+"""Thread-safe in-memory scan progress tracking. Flask routes and background scan workers share this small module to publish phase, file, count, timing, completion, and error information.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 import threading
 import time

@@ -1,3 +1,11 @@
+"""Command-line training entry point for the optional visual Field Notes classifier. It loads labeled samples, trains the model, evaluates it, and saves the serialized artifact.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -7,6 +15,11 @@ from visual_classifier import train_visual_classifier
 
 
 def main() -> int:
+    """Run the module as a command-line entry point.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     parser = argparse.ArgumentParser(
         description="Train the binary visual Field Notes classifier."
     )

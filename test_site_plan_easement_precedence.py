@@ -1,7 +1,17 @@
+"""Implementation module for the COABarrett File Identifier and Sorter. It groups related application behavior and is documented to help future maintainers trace data flow and side effects.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from metadata_extraction import regex_document_type, DEFAULT_CONFIG
 
 
 def test_site_plan_and_easement_plat_prefers_site_plan():
+    """Test site plan and easement plat prefers site plan.
+    """
     text = "SITE PLAN AND EASEMENT PLAT FOR LOT 12"
     match = regex_document_type(text, DEFAULT_CONFIG["document_type_regex_rules"])
     assert match is not None
@@ -9,6 +19,8 @@ def test_site_plan_and_easement_plat_prefers_site_plan():
 
 
 def test_site_plan_then_sewage_easement_plat_prefers_site_plan():
+    """Test site plan then sewage easement plat prefers site plan.
+    """
     text = "SITE PLAN, LOT 3\nSEWAGE EASEMENT PLAT"
     match = regex_document_type(text, DEFAULT_CONFIG["document_type_regex_rules"])
     assert match is not None
@@ -16,6 +28,8 @@ def test_site_plan_then_sewage_easement_plat_prefers_site_plan():
 
 
 def test_forest_conservation_plat_stays_plat():
+    """Test forest conservation plat stays plat.
+    """
     text = "FOREST CONSERVATION AMENDMENT PLAT"
     match = regex_document_type(text, DEFAULT_CONFIG["document_type_regex_rules"])
     assert match is not None

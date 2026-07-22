@@ -645,6 +645,17 @@ def api_update_document(document_id: str):
 
 @app.post("/api/documents/<document_id>/file")
 def api_file_document(document_id: str):
+    """Api file document.
+    
+    Args:
+        document_id: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    
+    Notes:
+        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """
     payload = request.get_json(silent=True) or {}
     state = read_state()
     document = find_document(state, document_id)
@@ -693,6 +704,14 @@ def api_file_document(document_id: str):
 
 @app.post("/api/file-all")
 def api_file_all_documents():
+    """Api file all documents.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    
+    Notes:
+        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """
     payload = request.get_json(silent=True) or {}
     state = read_state()
     try:

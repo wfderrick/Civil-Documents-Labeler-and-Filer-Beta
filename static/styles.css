@@ -1,3 +1,10 @@
+/*
+ * Application stylesheet. Rules are ordered broadly from global layout and cards
+ * through controls, queue/review states, PDF viewing, progress feedback, and
+ * responsive adjustments. Validation colors communicate document readiness, so
+ * coordinate style changes with getDocumentValidationState() in static/app.js.
+ */
+
 :root {
   color-scheme: light;
   --ink: #17202a;

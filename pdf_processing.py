@@ -1,3 +1,11 @@
+"""PDF rendering and text-layer utilities. These helpers rasterize pages for OCR, inspect existing text, build review PDFs, and handle temporary files used by the scan pipeline.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +19,14 @@ except Exception:
 
 
 def metadata_keyword_text(document: dict[str, Any]) -> str:
+    """Metadata keyword text.
+    
+    Args:
+        document: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     metadata = document.get("metadata", {})
     custom_text = {
         "lot": metadata.get("lot", ""),
@@ -134,6 +150,12 @@ def add_paddle_searchable_text_layer(pdf_path: Path, document: dict[str, Any]) -
 
 
 def write_standard_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
+    """Write standard pdf metadata.
+    
+    Args:
+        pdf_path: Input used by this operation.
+        document: Input used by this operation.
+    """
     metadata = document.get("metadata", {})
     with fitz.open(pdf_path) as pdf:
         pdf.set_metadata(

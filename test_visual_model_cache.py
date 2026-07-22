@@ -12,6 +12,8 @@ from visual_classifier import _get_cached_model, clear_model_cache
 
 
 def main() -> None:
+    """Run the module as a command-line entry point.
+    """
     with tempfile.TemporaryDirectory(prefix="visual_model_cache_test_") as temp_dir:
         model_path = Path(temp_dir) / "synthetic.joblib"
 

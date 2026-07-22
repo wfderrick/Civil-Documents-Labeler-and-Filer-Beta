@@ -1,3 +1,11 @@
+"""Implementation module for the COABarrett File Identifier and Sorter. It groups related application behavior and is documented to help future maintainers trace data flow and side effects.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -7,6 +15,11 @@ from visual_classifier import classify_pdf_visual
 
 
 def main() -> int:
+    """Run the module as a command-line entry point.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     parser = argparse.ArgumentParser(
         description="Test the binary visual Field Notes classifier on PDFs."
     )

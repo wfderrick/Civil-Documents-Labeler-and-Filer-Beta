@@ -1,3 +1,11 @@
+"""OCR engine lifecycle and page-recognition utilities. PaddleOCR instances are cached by configuration so repeated scans do not pay model initialization costs, while helper functions normalize the different result formats returned by OCR versions.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 import tempfile
 import threading
@@ -17,6 +25,12 @@ from paddleocr import PaddleOCR
 
 @contextmanager
 def time_block(name: str, progress_callback: Callable[[str], None] | None = None):
+    """Time block.
+    
+    Args:
+        name: Input used by this operation.
+        progress_callback: Input used by this operation.
+    """
     start = time.perf_counter()
     yield
     elapsed = time.perf_counter() - start
@@ -75,6 +89,17 @@ def _bbox_from_points(points: list[list[float]]) -> list[float]:
 
 
 def first_nonempty_value(*values):
+    """First nonempty value.
+    
+    Args:
+        *values: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    
+    Notes:
+        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """
     for value in values:
         if value is None:
             continue
@@ -387,6 +412,14 @@ def get_cached_ocr(
 def _init_ocr_worker(
     lang: str, cpu_threads: int, ocr_device: str, gpu_device_id: int
 ) -> None:
+    """Init ocr worker.
+    
+    Args:
+        lang: Input used by this operation.
+        cpu_threads: Input used by this operation.
+        ocr_device: Input used by this operation.
+        gpu_device_id: Input used by this operation.
+    """
     global _WORKER_OCR
     _WORKER_OCR = make_ocr(
         lang=lang,
@@ -399,6 +432,19 @@ def _init_ocr_worker(
 def _ocr_one_pdf_worker(
     index: int, pdf_path_text: str, dpi: int
 ) -> tuple[int, dict[str, Any]]:
+    """Ocr one pdf worker.
+    
+    Args:
+        index: Input used by this operation.
+        pdf_path_text: Input used by this operation.
+        dpi: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    
+    Notes:
+        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """
     if _WORKER_OCR is None:
         raise RuntimeError("OCR worker was not initialized.")
     pdf_path = Path(pdf_path_text)

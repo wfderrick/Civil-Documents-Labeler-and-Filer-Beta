@@ -1,3 +1,11 @@
+"""Persistent application-state repository. All reads and writes to the JSON review-state file pass through a process lock and centralized mutation helpers to reduce lost updates during Mass Scan and UI editing.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 
 import copy
@@ -94,6 +102,14 @@ def append_document(document: dict[str, Any]) -> list[dict[str, Any]]:
     document_copy = copy.deepcopy(document)
 
     def append(latest_state: dict[str, Any]) -> list[dict[str, Any]]:
+        """Append.
+        
+        Args:
+            latest_state: Input used by this operation.
+        
+        Returns:
+            The computed result for the caller. See the function body and type hints for the exact shape.
+        """
         documents = latest_state.setdefault("documents", [])
         document_id = document_copy.get("id")
         if not any(item.get("id") == document_id for item in documents):
@@ -107,6 +123,14 @@ def append_document(document: dict[str, Any]) -> list[dict[str, Any]]:
 def remove_document(document_id: str) -> tuple[dict[str, Any], bool]:
     """Remove one document from the active review queue by id."""
     def remove(latest_state: dict[str, Any]) -> bool:
+        """Remove.
+        
+        Args:
+            latest_state: Input used by this operation.
+        
+        Returns:
+            The computed result for the caller. See the function body and type hints for the exact shape.
+        """
         documents = latest_state.setdefault("documents", [])
         original_count = len(documents)
         latest_state["documents"] = [
@@ -128,6 +152,11 @@ def update_settings(values: dict[str, Any]) -> dict[str, Any]:
     values_copy = copy.deepcopy(values)
 
     def update(latest_state: dict[str, Any]) -> None:
+        """Update.
+        
+        Args:
+            latest_state: Input used by this operation.
+        """
         latest_state.setdefault("settings", {}).update(values_copy)
 
     state, _ = mutate_state(update)
@@ -168,6 +197,14 @@ def update_document(
 def update_output_folder(raw_value: str) -> tuple[dict[str, Any], Path]:
     """Validate/create an output folder and persist it in the latest settings."""
     def update(latest_state: dict[str, Any]) -> Path:
+        """Update.
+        
+        Args:
+            latest_state: Input used by this operation.
+        
+        Returns:
+            The computed result for the caller. See the function body and type hints for the exact shape.
+        """
         return update_output_folder_setting(latest_state, raw_value)
 
     return mutate_state(update)
@@ -185,6 +222,14 @@ def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
 
 
 def load_config_from_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Load config from state.
+    
+    Args:
+        state: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     settings = state.get("settings", {})
     config_path = Path(settings.get("config_path") or DEFAULT_CONFIG_PATH).resolve()
     config = load_config(config_path if config_path.exists() else None)

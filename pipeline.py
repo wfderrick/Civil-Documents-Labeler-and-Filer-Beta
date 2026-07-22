@@ -1,3 +1,11 @@
+"""High-level scan pipeline. This module orchestrates PDF discovery, page OCR, metadata extraction, batch voting, SDAT enrichment, output naming, and creation of the document records consumed by the review interface.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 import re
 from collections import Counter
@@ -27,10 +35,27 @@ from visual_classifier import fix_duplicate_document_types_with_visual_classifie
 
 
 def vote_key(value: str) -> str:
+    """Vote key.
+    
+    Args:
+        value: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     return re.sub(r"[^a-z0-9]", "", normalize_for_fuzzy(value))
 
 
 def vote_for_value(values: Iterable[str], fallback: str) -> str:
+    """Vote for value.
+    
+    Args:
+        values: Input used by this operation.
+        fallback: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     seen_display: dict[str, str] = {}
     counts: Counter[str] = Counter()
     for value in values:
@@ -49,6 +74,17 @@ def extract_document_metadata_votes(
     default_project_code: str,
     default_document_type: str,
 ) -> list[ExtractedMetadata]:
+    """Extract document metadata votes.
+    
+    Args:
+        scanned_documents: Input used by this operation.
+        config: Input used by this operation.
+        default_project_code: Input used by this operation.
+        default_document_type: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     return [
         extract_metadata(
             document.get("ocr_text", ""),
@@ -70,6 +106,13 @@ def _apply_sdat_record_to_shared(
     seed: ExtractedMetadata,
     record: dict[str, Any],
 ) -> None:
+    """Apply sdat record to shared.
+    
+    Args:
+        shared: Input used by this operation.
+        seed: Input used by this operation.
+        record: Input used by this operation.
+    """
     resolved = metadata_from_sdat_record(seed, record)
     # An SDAT result is authoritative for all property fields.
     for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section"):
@@ -116,6 +159,19 @@ def choose_batch_metadata_by_vote(
     resolve_duplicate_document_types: bool = True,
     strict_independent_lookup: bool = False,
 ) -> tuple[dict[str, str], list[ExtractedMetadata]]:
+    """Choose batch metadata by vote.
+    
+    Args:
+        scanned_documents: Input used by this operation.
+        config: Input used by this operation.
+        default_project_code: Input used by this operation.
+        default_document_type: Input used by this operation.
+        resolve_duplicate_document_types: Input used by this operation.
+        strict_independent_lookup: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     votes = extract_document_metadata_votes(
         scanned_documents, config, default_project_code, default_document_type
     )
@@ -223,6 +279,19 @@ def merge_batch_metadata(
     shared_metadata: Mapping[str, str],
     document_metadata: ExtractedMetadata | None = None,
 ) -> ExtractedMetadata:
+    """Merge batch metadata.
+    
+    Args:
+        document_text: Input used by this operation.
+        config: Input used by this operation.
+        default_project_code: Input used by this operation.
+        default_document_type: Input used by this operation.
+        shared_metadata: Input used by this operation.
+        document_metadata: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     document_metadata = document_metadata or extract_metadata(
         document_text, config, default_project_code, default_document_type
     )

@@ -1,3 +1,11 @@
+"""Document-domain operations used after OCR. The functions in this module merge metadata, synchronize batch fields, perform SDAT-assisted updates, create suggested filenames, and apply user edits without coupling those operations to Flask routes.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 import shutil
 from dataclasses import replace
@@ -108,6 +116,14 @@ def find_document(state: dict[str, Any], document_id: str) -> dict[str, Any] | N
 
 
 def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
+    """Metadata from dict.
+    
+    Args:
+        metadata: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     return ExtractedMetadata(
         lot=str(metadata.get("lot", "Unknown Lot")),
         address=str(metadata.get("address", "Unknown Address")),
@@ -289,6 +305,22 @@ def file_document_to_output(
     folder_name: str | None = None,
     file_name: str | None = None,
 ) -> dict[str, Any]:
+    """File document to output.
+    
+    Args:
+        document: Input used by this operation.
+        output_folder: Input used by this operation.
+        copy_file: Input used by this operation.
+        save_text: Input used by this operation.
+        folder_name: Input used by this operation.
+        file_name: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    
+    Notes:
+        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """
     source_path = Path(document["source_path"])
     if not source_path.exists():
         raise FileNotFoundError(f"Source PDF no longer exists: {source_path}")

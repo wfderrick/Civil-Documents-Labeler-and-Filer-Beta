@@ -1,3 +1,11 @@
+"""Optional image-based classifier for distinguishing Field Notes from other documents. Model loading is cached, feature extraction is isolated, and text-based classification remains available as a fallback.
+
+Maintenance notes:
+    Keep this module focused on its current responsibility. When changing behavior,
+    update the relevant tests and the project README so scan and review workflows
+    remain understandable to future maintainers.
+"""
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -37,6 +45,14 @@ def clear_model_cache() -> None:
 
 
 def _get_cached_model(model_file: Path) -> Any:
+    """Get cached model.
+    
+    Args:
+        model_file: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    """
     stat = model_file.stat()
     return _load_model_cached(str(model_file.resolve()), stat.st_mtime_ns)
 
@@ -61,6 +77,17 @@ def render_page_gray(
 
 
 def pdf_page_count(pdf_path: Path) -> int:
+    """Pdf page count.
+    
+    Args:
+        pdf_path: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    
+    Notes:
+        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """
     try:
         with fitz.open(pdf_path) as doc:
             return int(doc.page_count)
@@ -249,6 +276,17 @@ PLAN_DOCUMENT_TYPES = {"Site Plan", "House Location", "Wall Check"}
 
 
 def _field_notes_visual_threshold(config: Config) -> float:
+    """Field notes visual threshold.
+    
+    Args:
+        config: Input used by this operation.
+    
+    Returns:
+        The computed result for the caller. See the function body and type hints for the exact shape.
+    
+    Notes:
+        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """
     try:
         return float(config.get("visual_field_notes_threshold", 0.70))
     except Exception:
