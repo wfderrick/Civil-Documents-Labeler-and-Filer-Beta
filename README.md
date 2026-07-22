@@ -104,3 +104,12 @@ Property synchronization priority is Tax ID first, then address. Editing Tax ID 
 - `visual_classifier.py`: visual Field Notes classification and duplicate-type correction.
 
 The batch workflow, shared metadata voting, lookup-only behavior, SDAT synchronization, and File All behavior remain in place.
+
+## Mass Scan Tax ID isolation
+
+Mass Scan processes every PDF independently. SDAT Tax IDs are accepted from an
+explicit Tax ID lookup, or from an address lookup only when that address maps to
+one unambiguous SDAT record. Ambiguous address results are left blank for review
+instead of copying the first returned Tax ID into multiple documents. Map/parcel
+fallback remains available in Batch mode, but is intentionally disabled for Mass
+Scan because weak identifiers can match unrelated parcels.

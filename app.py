@@ -117,7 +117,7 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
         ).strip(),
         "project_code": (payload.get("project_code") or "").strip(),
         "project_code_override": (payload.get("project_code") or "").strip(),
-        "county": (payload.get("county") or "Frederick").strip(),
+        "county": (payload.get("county") or "Calvert").strip(),
         "document_type": "Field Notes",
         "lang": "en",
         "dpi": int(payload.get("dpi") or 300),
@@ -288,6 +288,7 @@ def scan_mass(
             default_project_code=settings["project_code"],
             default_document_type=settings["document_type"],
             resolve_duplicate_document_types=False,
+            strict_independent_lookup=True,
         )
         metadata_vote = metadata_votes[0]
         is_lookup = metadata_vote.document_type == LOOKUP_DOCUMENT_TYPE

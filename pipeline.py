@@ -21,6 +21,7 @@ from sdat import (
     lookup_maryland_property_by_address,
     lookup_maryland_property_records,
     metadata_from_sdat_record,
+    format_sdat_address,
 )
 from visual_classifier import fix_duplicate_document_types_with_visual_classifier
 
@@ -77,12 +78,43 @@ def _apply_sdat_record_to_shared(
             shared[field] = value
 
 
+
+
+def _normalized_address(value: str) -> str:
+    """Return a comparison-only address key with punctuation and spacing removed."""
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def _confident_unique_address_record(
+    address: str, records: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Return one SDAT record only when the OCR address identifies it uniquely.
+
+    Mass Scan documents are independent.  This guard prevents an ambiguous
+    address lookup (for example, a shared street address with several parcels)
+    from silently assigning the first SDAT Tax ID to multiple PDFs.
+    """
+    target = _normalized_address(address)
+    if not target:
+        return None
+
+    exact_or_containing: list[dict[str, Any]] = []
+    for record in records:
+        candidate = _normalized_address(format_sdat_address(record))
+        if not candidate:
+            continue
+        if candidate == target or target in candidate or candidate in target:
+            exact_or_containing.append(record)
+
+    return exact_or_containing[0] if len(exact_or_containing) == 1 else None
+
 def choose_batch_metadata_by_vote(
     scanned_documents: list[dict[str, Any]],
     config: Config,
     default_project_code: str,
     default_document_type: str,
     resolve_duplicate_document_types: bool = True,
+    strict_independent_lookup: bool = False,
 ) -> tuple[dict[str, str], list[ExtractedMetadata]]:
     votes = extract_document_metadata_votes(
         scanned_documents, config, default_project_code, default_document_type
@@ -155,11 +187,17 @@ def choose_batch_metadata_by_vote(
             shared["address"], county=county, limit=25
         )
         if records:
-            _apply_sdat_record_to_shared(shared, seed, records[0])
-            return shared, votes
+            selected_record = (
+                _confident_unique_address_record(shared["address"], records)
+                if strict_independent_lookup
+                else records[0]
+            )
+            if selected_record is not None:
+                _apply_sdat_record_to_shared(shared, seed, selected_record)
+                return shared, votes
 
     # Priority 3: map/parcel fallback only when stronger identifiers failed.
-    if shared["tax_map"] or shared["parcel"]:
+    if (shared["tax_map"] or shared["parcel"]) and not strict_independent_lookup:
         terms = SdatSearchTerms(
             county=county,
             lot=(
