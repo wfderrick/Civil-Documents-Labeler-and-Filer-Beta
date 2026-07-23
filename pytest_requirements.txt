@@ -1,4 +1,4 @@
-paddleocr>=3.7.0
+paddleocr>=3.7.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu129/
 paddlex>=3.7.0
 paddlepaddle-gpu>=3.3.1
 PyMuPDF>=1.24.0
