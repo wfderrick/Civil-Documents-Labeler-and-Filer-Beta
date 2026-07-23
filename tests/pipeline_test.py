@@ -18,4 +18,4 @@ def test_vote_for_value_all_unknown():
         "Unknown",
     ]
     fallback = "test"
-    assert vote_for_value((val.test for val in values), fallback) == fallback
+    assert vote_for_value((val for val in values), fallback) == fallback
