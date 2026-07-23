@@ -334,20 +334,36 @@ def scan_mass(
 
 
 def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
-    """The _folder_project_and_section() function returns the project code and
-    section taken from the output_folder parameter. It splits the parameter on
-    the . and the - to determine the project code and section and returns both.
+    """
+    Extract the project code and section name from an output folder.
+
+    Expected folder format:
+
+        PROJECT.SECTION-Description
+
+    Examples:
+        12345.A-Drainage
+            -> ("12345", "A")
+
+        12345.B
+            -> ("12345", "B")
+
+        12345
+            -> ("12345", "")
+
+    Any text after the first '-' is ignored because it is treated as a
+    descriptive suffix rather than part of the section identifier.
     """
     name = output_folder.name.strip()
+
     if "." not in name:
         return name, ""
-    project_code, section = name.split(".", 1)
-    try:
-        section, extra = section.split("-", 1)
-        return project_code.strip(), section.strip()
 
-    finally:
-        return project_code.strip(), section.strip()
+    project_code, section = name.split(".", 1)
+    section = section.split("-", 1)[0]
+
+    return project_code.strip(), section.strip()
+    
 
 
 """--------------------------------------------------------------------------"""

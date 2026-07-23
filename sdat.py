@@ -7,12 +7,15 @@ Maintenance notes:
 """
 
 from __future__ import annotations
+
+import json
 import re
 import sys
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
+
 import requests
-from tax_id_utils import extract_tax_id_parts
+
 from metadata_extraction import (
     Config,
     ExtractedMetadata,
@@ -24,6 +27,7 @@ from metadata_extraction import (
     normalize_value,
     safe_path_part,
 )
+from tax_id_utils import extract_tax_id_parts
 
 LOOKUP_DOCUMENT_TYPE = "Lookup Only"
 
@@ -55,13 +59,54 @@ SDAT_FIELDS = {
     "mdp_city": "mdp_street_address_city_mdp_field_city",
     "mdp_zip": "mdp_street_address_zip_code_mdp_field_zipcode",
     "link": "real_property_search_link",
+    "jurisdiction_code_mdp_field_jurscode": "jurisdiction_code_mdp_field_jurscode",
+    "finder_online_link": "finder_online_link",
+    "mdp_longitude_mdp_field_digxcord_converted_to_wgs84": "mdp_longitude_mdp_field_digxcord_converted_to_wgs84",
+    "mdp_latitude_mdp_field_digycord_converted_to_wgs84": "mdp_latitude_mdp_field_digycord_converted_to_wgs84",
+    "mappable_latitude_and_longitude": "mappable_latitude_and_longitude",
+    "legal_description_line_1_mdp_field_legal1_sdat_field_17": "legal_description_line_1_mdp_field_legal1_sdat_field_17",
+    "legal_description_line_2_mdp_field_legal2_sdat_field_18": "legal_description_line_2_mdp_field_legal2_sdat_field_18",
+    "deed_reference_1_liber_mdp_field_dr1liber_sdat_field_30": "deed_reference_1_liber_mdp_field_dr1liber_sdat_field_30",
+    "deed_reference_1_folio_mdp_field_dr1folio_sdat_field_31": "deed_reference_1_folio_mdp_field_dr1folio_sdat_field_31",
+    "subdivision_code_mdp_field_subdivsn_sdat_field_37": "subdivision_code_mdp_field_subdivsn_sdat_field_37",
+    "grid_mdp_field_grid_sdat_field_43": "grid_mdp_field_grid_sdat_field_43",
+    "zoning_code_mdp_field_zoning_sdat_field_45": "zoning_code_mdp_field_zoning_sdat_field_45",
+    "land_use_code_mdp_field_lu_desclu_sdat_field_50": "land_use_code_mdp_field_lu_desclu_sdat_field_50",
+    "property_factors_utilities_water_mdp_field_pfuw_sdat_field_63": "property_factors_utilities_water_mdp_field_pfuw_sdat_field_63",
+    "property_factors_utilities_sewer_mdp_field_pfus_sdat_field_64": "property_factors_utilities_sewer_mdp_field_pfus_sdat_field_64",
+    "property_factors_location_waterfront_mdp_field_pflw_sdat_field_65": "property_factors_location_waterfront_mdp_field_pflw_sdat_field_65",
+    "property_factors_street_paved_mdp_field_pfsp_sdat_field_67": "property_factors_street_paved_mdp_field_pfsp_sdat_field_67",
+    "property_factors_street_unpaved_mdp_field_pfsu_sdat_field_68": "property_factors_street_unpaved_mdp_field_pfsu_sdat_field_68",
 }
+
+# Fields below are retained as hidden document metadata and embedded in XMP.
+# They are intentionally separate from the review UI's editable property fields.
+SDAT_METADATA_FIELDS = (
+    "jurisdiction_code_mdp_field_jurscode",
+    "finder_online_link",
+    "mdp_longitude_mdp_field_digxcord_converted_to_wgs84",
+    "mdp_latitude_mdp_field_digycord_converted_to_wgs84",
+    "mappable_latitude_and_longitude",
+    "legal_description_line_1_mdp_field_legal1_sdat_field_17",
+    "legal_description_line_2_mdp_field_legal2_sdat_field_18",
+    "deed_reference_1_liber_mdp_field_dr1liber_sdat_field_30",
+    "deed_reference_1_folio_mdp_field_dr1folio_sdat_field_31",
+    "subdivision_code_mdp_field_subdivsn_sdat_field_37",
+    "grid_mdp_field_grid_sdat_field_43",
+    "zoning_code_mdp_field_zoning_sdat_field_45",
+    "land_use_code_mdp_field_lu_desclu_sdat_field_50",
+    "property_factors_utilities_water_mdp_field_pfuw_sdat_field_63",
+    "property_factors_utilities_sewer_mdp_field_pfus_sdat_field_64",
+    "property_factors_location_waterfront_mdp_field_pflw_sdat_field_65",
+    "property_factors_street_paved_mdp_field_pfsp_sdat_field_67",
+    "property_factors_street_unpaved_mdp_field_pfsu_sdat_field_68",
+)
 
 
 @dataclass(frozen=True)
 class SdatSearchTerms:
-    """Represent SdatSearchTerms behavior and related state.
-    """
+    """Represent SdatSearchTerms behavior and related state."""
+
     county: str = ""
     lot: str = ""
     tax_map: str = ""
@@ -90,10 +135,12 @@ def is_sdat_lookup_document(text: str) -> bool:
     """Identify an SDAT printout using several stable page anchors."""
     normalized = normalize_for_fuzzy(text)
     hits = sum(
-        normalize_for_fuzzy(anchor) in normalized for anchor in SDAT_LOOKUP_ANCHORS
+        normalize_for_fuzzy(anchor) in normalized
+        for anchor in SDAT_LOOKUP_ANCHORS
     )
     strong_header = (
-        normalize_for_fuzzy("department of assessments and taxation") in normalized
+        normalize_for_fuzzy("department of assessments and taxation")
+        in normalized
         and normalize_for_fuzzy("real property data search") in normalized
     )
     account_block = (
@@ -110,11 +157,17 @@ def extract_sdat_lookup_tax_id(text: str) -> tuple[str, str, str] | None:
         r"\baccount\s+identifier.{0,80}?district\s*[-:#]?\s*([0-9Oo]{1,2}).{0,80}?account\s+(?:number|no\.?|#)\s*[-:#]?\s*([0-9OoIl]{4,10})\b",
     )
     for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        match = re.search(
+            pattern, text, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL
+        )
         if not match:
             continue
-        district = re.sub(r"\D", "", normalize_ocr_numbers(match.group(1))).zfill(2)
-        account = re.sub(r"\D", "", normalize_ocr_numbers(match.group(2))).zfill(6)
+        district = re.sub(
+            r"\D", "", normalize_ocr_numbers(match.group(1))
+        ).zfill(2)
+        account = re.sub(
+            r"\D", "", normalize_ocr_numbers(match.group(2))
+        ).zfill(6)
         if district and account:
             return district, account, f"{district}-{account}"
     return None
@@ -122,31 +175,35 @@ def extract_sdat_lookup_tax_id(text: str) -> tuple[str, str, str] | None:
 
 def soql_escape(value: str) -> str:
     """Soql escape.
-    
+
     Args:
         value: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
     return str(value or "").replace("'", "''").strip()
 
 
-def or_equals(field: str, value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)) -> str:
+def or_equals(
+    field: str, value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)
+) -> str:
     """Or equals.
-    
+
     Args:
         field: Input used by this operation.
         value: Input used by this operation.
         widths: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
     options = identifier_options(value, widths)
     return (
         "("
-        + " OR ".join(f"{field} = '{soql_escape(option)}'" for option in options)
+        + " OR ".join(
+            f"{field} = '{soql_escape(option)}'" for option in options
+        )
         + ")"
     )
 
@@ -155,32 +212,40 @@ def extract_sdat_search_terms(
     text: str, metadata: ExtractedMetadata, config: Config
 ) -> SdatSearchTerms:
     """Extract sdat search terms.
-    
+
     Args:
         text: Input used by this operation.
         metadata: Input used by this operation.
         config: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
-    county = first_match(text, config.get("county_patterns", [])) or config.get(
-        "default_county", ""
-    )
-    county = re.sub(r"\bcounty\b", "", str(county), flags=re.IGNORECASE).strip()
+    county = first_match(
+        text, config.get("county_patterns", [])
+    ) or config.get("default_county", "")
+    county = re.sub(
+        r"\bcounty\b", "", str(county), flags=re.IGNORECASE
+    ).strip()
     tax_map = (
         metadata.tax_map
-        or first_match(text, config.get("map_patterns", []), normalize_numbers=False)
+        or first_match(
+            text, config.get("map_patterns", []), normalize_numbers=False
+        )
         or ""
     )
     parcel = (
         metadata.parcel
-        or first_match(text, config.get("parcel_patterns", []), normalize_numbers=False)
+        or first_match(
+            text, config.get("parcel_patterns", []), normalize_numbers=False
+        )
         or ""
     )
     tax_id = (
         metadata.tax_id
-        or first_match(text, config.get("tax_id_patterns", []), normalize_numbers=True)
+        or first_match(
+            text, config.get("tax_id_patterns", []), normalize_numbers=True
+        )
         or ""
     )
     district, account_number = extract_tax_id_parts(tax_id)
@@ -193,7 +258,9 @@ def extract_sdat_search_terms(
     )
     account_number = (
         account_number
-        or first_match(text, config.get("account_patterns", []), normalize_numbers=True)
+        or first_match(
+            text, config.get("account_patterns", []), normalize_numbers=True
+        )
         or ""
     )
     lot = "" if metadata.lot.lower().startswith("unknown") else metadata.lot
@@ -204,17 +271,15 @@ def extract_sdat_search_terms(
         parcel=safe_path_part(parcel, "") if parcel else "",
         tax_id=safe_path_part(tax_id, "") if tax_id else "",
         district=safe_path_part(district, "") if district else "",
-        account_number=safe_path_part(account_number, "") if account_number else "",
+        account_number=safe_path_part(account_number, "")
+        if account_number
+        else "",
     )
 
 
 def selected_sdat_fields() -> list[str]:
-    """Selected sdat fields.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
-    return [
+    """Return every Socrata column needed for matching and PDF metadata."""
+    core_fields = [
         SDAT_FIELDS["county"],
         SDAT_FIELDS["account_id"],
         SDAT_FIELDS["district"],
@@ -233,17 +298,18 @@ def selected_sdat_fields() -> list[str]:
         SDAT_FIELDS["mdp_zip"],
         SDAT_FIELDS["link"],
     ]
+    return core_fields + [SDAT_FIELDS[field] for field in SDAT_METADATA_FIELDS]
 
 
 def sdat_get(where_parts: list[str], limit: int = 200) -> list[dict[str, Any]]:
-    """Sdat get.
-    
+    """Query the Maryland Open Data SDAT endpoint with the selected columns.
+
     Args:
-        where_parts: Input used by this operation.
-        limit: Input used by this operation.
-    
+        where_parts: SoQL predicates joined with ``AND``.
+        limit: Maximum number of property records to request.
+
     Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
+        Decoded SDAT records returned by the Socrata API.
     """
     if not where_parts:
         return []
@@ -263,20 +329,24 @@ def sdat_get(where_parts: list[str], limit: int = 200) -> list[dict[str, Any]]:
     return response.json()
 
 
-def record_identifier_matches(record: dict[str, Any], key: str, target: str) -> bool:
+def record_identifier_matches(
+    record: dict[str, Any], key: str, target: str
+) -> bool:
     """Record identifier matches.
-    
+
     Args:
         record: Input used by this operation.
         key: Input used by this operation.
         target: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
     if not target:
         return True
-    field = {"tax_map": "map", "account_number": "account_number"}.get(key, key)
+    field = {"tax_map": "map", "account_number": "account_number"}.get(
+        key, key
+    )
     return normalize_identifier(
         record.get(SDAT_FIELDS[field], "")
     ) == normalize_identifier(target)
@@ -286,11 +356,11 @@ def filter_sdat_records(
     records: list[dict[str, Any]], terms: SdatSearchTerms
 ) -> list[dict[str, Any]]:
     """Filter sdat records.
-    
+
     Args:
         records: Input used by this operation.
         terms: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -304,7 +374,9 @@ def filter_sdat_records(
             record, "parcel", terms.parcel
         ):
             continue
-        if terms.lot and not record_identifier_matches(record, "lot", terms.lot):
+        if terms.lot and not record_identifier_matches(
+            record, "lot", terms.lot
+        ):
             continue
         if terms.district and not record_identifier_matches(
             record, "district", terms.district
@@ -318,12 +390,14 @@ def filter_sdat_records(
     return filtered or records
 
 
-def lookup_maryland_property_records(terms: SdatSearchTerms) -> list[dict[str, Any]]:
+def lookup_maryland_property_records(
+    terms: SdatSearchTerms,
+) -> list[dict[str, Any]]:
     """Lookup maryland property records.
-    
+
     Args:
         terms: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -342,7 +416,9 @@ def lookup_maryland_property_records(terms: SdatSearchTerms) -> list[dict[str, A
                 [
                     county_filter,
                     or_equals(
-                        SDAT_FIELDS["account_number"], terms.account_number, (6, 8)
+                        SDAT_FIELDS["account_number"],
+                        terms.account_number,
+                        (6, 8),
                     ),
                     or_equals(SDAT_FIELDS["district"], terms.district, (2,)),
                 ],
@@ -356,7 +432,9 @@ def lookup_maryland_property_records(terms: SdatSearchTerms) -> list[dict[str, A
             (
                 [
                     or_equals(
-                        SDAT_FIELDS["account_number"], terms.account_number, (6, 8)
+                        SDAT_FIELDS["account_number"],
+                        terms.account_number,
+                        (6, 8),
                     ),
                     or_equals(SDAT_FIELDS["district"], terms.district, (2,)),
                 ],
@@ -368,7 +446,10 @@ def lookup_maryland_property_records(terms: SdatSearchTerms) -> list[dict[str, A
     if county_filter and terms.tax_map:
         strategies.append(
             (
-                [county_filter, or_equals(SDAT_FIELDS["map"], terms.tax_map, (3, 4))],
+                [
+                    county_filter,
+                    or_equals(SDAT_FIELDS["map"], terms.tax_map, (3, 4)),
+                ],
                 True,
             )
         )
@@ -376,7 +457,10 @@ def lookup_maryland_property_records(terms: SdatSearchTerms) -> list[dict[str, A
     if county_filter and terms.parcel:
         strategies.append(
             (
-                [county_filter, or_equals(SDAT_FIELDS["parcel"], terms.parcel, (3, 4))],
+                [
+                    county_filter,
+                    or_equals(SDAT_FIELDS["parcel"], terms.parcel, (3, 4)),
+                ],
                 True,
             )
         )
@@ -384,17 +468,21 @@ def lookup_maryland_property_records(terms: SdatSearchTerms) -> list[dict[str, A
     for where_parts, should_filter in strategies:
         records = sdat_get(where_parts)
         if records:
-            return filter_sdat_records(records, terms) if should_filter else records
+            return (
+                filter_sdat_records(records, terms)
+                if should_filter
+                else records
+            )
 
     return []
 
 
 def format_sdat_address(record: dict[str, Any]) -> str:
     """Format sdat address.
-    
+
     Args:
         record: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -407,9 +495,13 @@ def format_sdat_address(record: dict[str, Any]) -> str:
         part for part in [number, street, street_type] if part
     ).strip()
     if not street_address:
-        street_address = normalize_value(record.get(SDAT_FIELDS["mdp_address"], ""))
+        street_address = normalize_value(
+            record.get(SDAT_FIELDS["mdp_address"], "")
+        )
         city = city or normalize_value(record.get(SDAT_FIELDS["mdp_city"], ""))
-        zip_code = zip_code or normalize_value(record.get(SDAT_FIELDS["mdp_zip"], ""))
+        zip_code = zip_code or normalize_value(
+            record.get(SDAT_FIELDS["mdp_zip"], "")
+        )
     return (
         " ".join(
             part for part in [street_address, city, "MD", zip_code] if part
@@ -421,10 +513,10 @@ def format_sdat_address(record: dict[str, Any]) -> str:
 
 def tax_id_from_sdat_record(record: dict[str, Any]) -> str:
     """Tax id from sdat record.
-    
+
     Args:
         record: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -435,17 +527,23 @@ def tax_id_from_sdat_record(record: dict[str, Any]) -> str:
     return ""
 
 
+def normalize_sdat_metadata_value(value: Any) -> str:
+    """Convert an SDAT scalar or location object into stable metadata text."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return normalize_value(str(value))
+
+
 def metadata_from_sdat_record(
     metadata: ExtractedMetadata, record: dict[str, Any]
 ) -> ExtractedMetadata:
-    """Metadata from sdat record.
-    
-    Args:
-        metadata: Input used by this operation.
-        record: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
+    """Merge one authoritative SDAT record into extracted document metadata.
+
+    Existing OCR values are preserved when SDAT omits a field. File-naming
+    fields are sanitized, while descriptive values and links are retained as
+    ordinary text for later XMP serialization.
     """
     address = format_sdat_address(record)
     lot = normalize_value(record.get(SDAT_FIELDS["lot"], ""))
@@ -457,21 +555,28 @@ def metadata_from_sdat_record(
         metadata,
         lot=safe_path_part(lot, metadata.lot) if lot else metadata.lot,
         address=(
-            safe_path_part(address, metadata.address) if address else metadata.address
+            safe_path_part(address, metadata.address)
+            if address
+            else metadata.address
         ),
         tax_map=safe_path_part(tax_map, "") if tax_map else metadata.tax_map,
         parcel=safe_path_part(parcel, "") if parcel else metadata.parcel,
         tax_id=safe_path_part(tax_id, "") if tax_id else metadata.tax_id,
         section=safe_path_part(section, "") if section else metadata.section,
+        **{
+            field: normalize_sdat_metadata_value(record.get(SDAT_FIELDS[field], ""))
+            or getattr(metadata, field)
+            for field in SDAT_METADATA_FIELDS
+        },
     )
 
 
 def _address_tokens(address: str) -> tuple[str, list[str]]:
     """Address tokens.
-    
+
     Args:
         address: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -501,7 +606,9 @@ def _address_tokens(address: str) -> tuple[str, list[str]]:
         "CIR",
         "CIRCLE",
     }
-    words = [part for part in parts[1:] if part not in stop and not part.isdigit()]
+    words = [
+        part for part in parts[1:] if part not in stop and not part.isdigit()
+    ]
     return number, words[:3]
 
 
@@ -509,12 +616,12 @@ def lookup_maryland_property_by_address(
     address: str, county: str = "", limit: int = 100
 ) -> list[dict[str, Any]]:
     """Lookup maryland property by address.
-    
+
     Args:
         address: Input used by this operation.
         county: Input used by this operation.
         limit: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -540,17 +647,19 @@ def lookup_maryland_property_by_address(
 
     def score(record: dict[str, Any]) -> int:
         """Score.
-        
+
         Args:
             record: Input used by this operation.
-        
+
         Returns:
             The computed result for the caller. See the function body and type hints for the exact shape.
         """
-        candidate = re.sub(r"[^A-Z0-9]", "", format_sdat_address(record).upper())
-        return sum(1 for token in [number, *words] if token and token in candidate) + (
-            5 if candidate == target else 0
+        candidate = re.sub(
+            r"[^A-Z0-9]", "", format_sdat_address(record).upper()
         )
+        return sum(
+            1 for token in [number, *words] if token and token in candidate
+        ) + (5 if candidate == target else 0)
 
     return sorted(records, key=score, reverse=True)
 
@@ -559,12 +668,12 @@ def enrich_metadata_with_sdat(
     metadata: ExtractedMetadata, text: str, config: Config
 ) -> ExtractedMetadata:
     """Enrich metadata with sdat.
-    
+
     Args:
         metadata: Input used by this operation.
         text: Input used by this operation.
         config: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -573,4 +682,8 @@ def enrich_metadata_with_sdat(
     records = lookup_maryland_property_records(
         extract_sdat_search_terms(text, metadata, config)
     )
-    return metadata_from_sdat_record(metadata, records[0]) if records else metadata
+    return (
+        metadata_from_sdat_record(metadata, records[0])
+        if records
+        else metadata
+    )

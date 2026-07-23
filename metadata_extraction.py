@@ -143,8 +143,13 @@ def normalize_ocr_numbers(text: str) -> str:
 
 @dataclass(frozen=True)
 class ExtractedMetadata:
-    """Represent ExtractedMetadata behavior and related state.
+    """Structured OCR and SDAT metadata carried through the scan pipeline.
+
+    The first eight fields are used by the review interface and output naming.
+    The remaining fields are SDAT-only property details that are retained in the
+    document record and written to XMP without adding controls to the UI.
     """
+
     lot: str
     address: str
     project_code: str
@@ -153,6 +158,24 @@ class ExtractedMetadata:
     parcel: str = ""
     tax_id: str = ""
     section: str = ""
+    jurisdiction_code_mdp_field_jurscode: str = ""
+    finder_online_link: str = ""
+    mdp_longitude_mdp_field_digxcord_converted_to_wgs84: str = ""
+    mdp_latitude_mdp_field_digycord_converted_to_wgs84: str = ""
+    mappable_latitude_and_longitude: str = ""
+    legal_description_line_1_mdp_field_legal1_sdat_field_17: str = ""
+    legal_description_line_2_mdp_field_legal2_sdat_field_18: str = ""
+    deed_reference_1_liber_mdp_field_dr1liber_sdat_field_30: str = ""
+    deed_reference_1_folio_mdp_field_dr1folio_sdat_field_31: str = ""
+    subdivision_code_mdp_field_subdivsn_sdat_field_37: str = ""
+    grid_mdp_field_grid_sdat_field_43: str = ""
+    zoning_code_mdp_field_zoning_sdat_field_45: str = ""
+    land_use_code_mdp_field_lu_desclu_sdat_field_50: str = ""
+    property_factors_utilities_water_mdp_field_pfuw_sdat_field_63: str = ""
+    property_factors_utilities_sewer_mdp_field_pfus_sdat_field_64: str = ""
+    property_factors_location_waterfront_mdp_field_pflw_sdat_field_65: str = ""
+    property_factors_street_paved_mdp_field_pfsp_sdat_field_67: str = ""
+    property_factors_street_unpaved_mdp_field_pfsu_sdat_field_68: str = ""
 
 
 @dataclass(frozen=True)
@@ -408,15 +431,19 @@ def regex_document_type(text: str, rules: Any) -> FuzzyMatch | None:
 def fuzzy_document_type(
     text: str, keywords: Any, threshold: float = DOCUMENT_TYPE_THRESHOLD
 ) -> FuzzyMatch | None:
-    """Fuzzy document type.
-    
+    """Return the highest-scoring configured document type found in OCR text.
+
+    Each configured keyword is normalized and compared with the most similar
+    text window. The best match is returned only when its score meets
+    ``threshold``; otherwise the function returns ``None``.
+
     Args:
-        text: Input used by this operation.
-        keywords: Input used by this operation.
-        threshold: Input used by this operation.
-    
+        text: OCR text to classify.
+        keywords: Document-type labels and their candidate phrases.
+        threshold: Minimum similarity score required to accept a match.
+
     Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
+        The strongest accepted match, or ``None`` when no candidate is reliable.
     """
     normalized_text = normalize_for_fuzzy(text)
     best: FuzzyMatch | None = None

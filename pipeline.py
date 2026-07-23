@@ -30,6 +30,7 @@ from sdat import (
     lookup_maryland_property_records,
     metadata_from_sdat_record,
     format_sdat_address,
+    SDAT_METADATA_FIELDS,
 )
 from visual_classifier import fix_duplicate_document_types_with_visual_classifier
 
@@ -114,8 +115,17 @@ def _apply_sdat_record_to_shared(
         record: Input used by this operation.
     """
     resolved = metadata_from_sdat_record(seed, record)
-    # An SDAT result is authoritative for all property fields.
-    for field in ("lot", "address", "tax_map", "parcel", "tax_id", "section"):
+    # SDAT is authoritative for the visible property fields and for the hidden
+    # values that are persisted only in the document record and XMP packet.
+    for field in (
+        "lot",
+        "address",
+        "tax_map",
+        "parcel",
+        "tax_id",
+        "section",
+        *SDAT_METADATA_FIELDS,
+    ):
         value = getattr(resolved, field)
         if is_known_value(value):
             shared[field] = value
@@ -314,4 +324,10 @@ def merge_batch_metadata(
             shared_metadata.get("section", ""), document_metadata.section
         ),
         project_code=safe_path_part(default_project_code, "Project"),
+        **{
+            field: prefer_known(
+                shared_metadata.get(field, ""), getattr(document_metadata, field)
+            )
+            for field in SDAT_METADATA_FIELDS
+        },
     )

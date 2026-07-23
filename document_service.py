@@ -19,6 +19,7 @@ from sdat import (
     enrich_metadata_with_sdat,
     lookup_maryland_property_by_address,
     metadata_from_sdat_record,
+    SDAT_METADATA_FIELDS,
 )
 from state_store import load_config_from_state
 
@@ -133,6 +134,10 @@ def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
         parcel=str(metadata.get("parcel", "")),
         tax_id=str(metadata.get("tax_id", "")),
         section=str(metadata.get("section", "")),
+        **{
+            field: str(metadata.get(field, "") or "")
+            for field in SDAT_METADATA_FIELDS
+        },
     )
 
 
@@ -181,6 +186,7 @@ def refresh_property_fields_from_sdat(
                 "parcel",
                 "tax_id",
                 "section",
+                *SDAT_METADATA_FIELDS,
             )
         }
         for target_document in documents:
@@ -203,6 +209,7 @@ def refresh_property_fields_from_sdat(
             "parcel",
             "tax_id",
             "section",
+            *SDAT_METADATA_FIELDS,
         )
     }
     for target_document in documents:
