@@ -21,9 +21,10 @@ import fitz
 
 try:
     import paddle
+    from paddleocr import PaddleOCR
 except Exception:  # noqa: BLE001
     paddle = None
-from paddleocr import PaddleOCR
+
 
 
 @contextmanager
