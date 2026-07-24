@@ -7,12 +7,14 @@ Maintenance notes:
 """
 
 from __future__ import annotations
+
 import json
 import re
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 DOCUMENT_TYPE_THRESHOLD = 0.75
 
@@ -38,7 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         r"\bmap\s*/\s*parcel\s*[:#-]?\s*[0-9A-Za-z]+\s*/\s*([0-9A-Za-z]+)\b",
     ],
     "tax_id_patterns": [
-        r"\btax\s*(?:id|i\.?d\.?|1\.?d\.?)\s*[:#.-]?\s*"
+        r"\btax\s*(?:id|i\.?d\.?|1\.?d\.?)\s*[:#.-]?\s*",
         r"([0-9Oo]{1,2})\s*[- ]\s*([0-9OoIl]{4,8})\b",
     ],
     "district_patterns": [
@@ -367,7 +369,7 @@ def best_keyword_window(keyword: str, normalized_text: str) -> tuple[float, int,
 
     matcher = SequenceMatcher(None, keyword, autojunk=False)
     for window_length in range(min_window, max_window + 1):
-        for start in range(0, len(normalized_text) - window_length + 1):
+        for start in range(len(normalized_text) - window_length + 1):
             end = start + window_length
             matcher.set_seq2(normalized_text[start:end])
 

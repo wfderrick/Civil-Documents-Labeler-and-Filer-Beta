@@ -7,14 +7,16 @@ Maintenance notes:
 """
 
 from __future__ import annotations
+
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
 import fitz
 
 try:
     import pikepdf
-except Exception:
+except Exception:  # noqa: BLE001
     pikepdf = None
 
 
@@ -38,7 +40,7 @@ def metadata_keyword_text(document: dict[str, Any]) -> str:
         "tax_id": metadata.get("tax_id", ""),
         "section": metadata.get("section", ""),
         "source_name": document.get("source_name", ""),
-        "filed_at": datetime.now().isoformat(timespec="seconds"),
+        "filed_at": datetime.now().isoformat(timespec="seconds"),  # noqa: DTZ005
     }
     return "; ".join(f"{key}={value}" for key, value in custom_text.items() if value)
 
@@ -141,7 +143,7 @@ def add_paddle_searchable_text_layer(pdf_path: Path, document: dict[str, Any]) -
                         overlay=True,
                     )
                     inserted += 1
-                except Exception:
+                except Exception:  # noqa: BLE001, S112
                     continue
 
         if inserted:
@@ -183,7 +185,7 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
             with pdf.open_metadata(set_pikepdf_as_editor=True) as meta:
                 try:
                     meta.register_xml_namespace("coa", namespace)
-                except Exception:
+                except Exception:  # noqa: BLE001, S110
                     pass
 
                 title = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}".strip(
@@ -223,14 +225,14 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
                     "coa:StreetPaved": metadata.get("property_factors_street_paved_mdp_field_pfsp_sdat_field_67", ""),
                     "coa:StreetUnpaved": metadata.get("property_factors_street_unpaved_mdp_field_pfsu_sdat_field_68", ""),
                     "coa:OriginalFileName": document.get("source_name", ""),
-                    "coa:FiledAt": datetime.now().isoformat(timespec="seconds"),
+                    "coa:FiledAt": datetime.now().isoformat(timespec="seconds"),  # noqa: DTZ005
                     "coa:Application": "COA Barrett File Identifier and Sorter",
                 }
                 for key, value in custom_fields.items():
                     if value:
                         meta[key] = str(value)
             pdf.save(pdf_path)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"Could not write XMP metadata to {pdf_path}: {exc}")
 
 
@@ -238,12 +240,12 @@ def write_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
     """Write standard metadata, structured XMP, and a PaddleOCR text layer."""
     try:
         add_paddle_searchable_text_layer(pdf_path, document)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"Could not add PaddleOCR searchable text layer to {pdf_path}: {exc}")
 
     try:
         write_standard_pdf_metadata(pdf_path, document)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         print(f"Could not write standard PDF metadata to {pdf_path}: {exc}")
 
     write_xmp_metadata(pdf_path, document)

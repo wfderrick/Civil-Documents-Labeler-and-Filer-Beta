@@ -336,10 +336,6 @@ def scan_mass(
 
 def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     """
-    NOTE: THE TESTING FOR THIS FUNCTION RELIES ON A COPY IN ``app_test.py`` SO
-    IF YOU MAKE CHANGES TO THIS FUNCTION COPY THE CHANGES OVER TO THE
-    ``app_test.py`` FILE.
-
     Extract the project code and section name from an output folder.
 
     Expected folder format:
@@ -392,7 +388,7 @@ def handle_unexpected_error(error):
     if request.path.startswith("/api/"):
         app.logger.exception("API request failed")
         return api_error(str(error) or "Unexpected server error")
-    raise
+    raise  # noqa: PLE0704
 
 
 @app.get("/")
@@ -532,9 +528,12 @@ def api_scan():
         return api_error("Input folder is required.", 400)
     if not in_place and not settings["output_folder"]:
         finish_scan_progress(
-            failed=True, message="Scan failed: Output folder is required unless In-Place is enabled."
+            failed=True,
+            message="Scan failed: Output folder is required unless In-Place is enabled.",
         )
-        return api_error("Output folder is required unless In-Place is enabled.", 400)
+        return api_error(
+            "Output folder is required unless In-Place is enabled.", 400
+        )
     if not input_folder.is_dir():
         finish_scan_progress(
             failed=True,
@@ -694,7 +693,9 @@ def api_file_document(document_id: str):
         )
 
     in_place = bool(
-        payload.get("in_place", state.get("settings", {}).get("in_place", False))
+        payload.get(
+            "in_place", state.get("settings", {}).get("in_place", False)
+        )
     )
     output_folder = Path(state.get("settings", {}).get("output_folder") or ".")
     if not in_place:
@@ -747,7 +748,9 @@ def api_file_all_documents():
     payload = request.get_json(silent=True) or {}
     state = read_state()
     in_place = bool(
-        payload.get("in_place", state.get("settings", {}).get("in_place", False))
+        payload.get(
+            "in_place", state.get("settings", {}).get("in_place", False)
+        )
     )
     output_folder = Path(state.get("settings", {}).get("output_folder") or ".")
     if not in_place:
@@ -788,7 +791,9 @@ def api_file_all_documents():
 
     if not in_place:
         try:
-            append_batch_tracker(normal_documents, output_folder, filed_documents)
+            append_batch_tracker(
+                normal_documents, output_folder, filed_documents
+            )
         except OSError as error:
             return api_error(
                 f"Documents were filed, but the tracker could not be updated: \
@@ -806,7 +811,7 @@ def api_file_all_documents():
                     from send2trash import send2trash
 
                     send2trash(str(source))
-                except Exception:
+                except Exception:  # noqa: BLE001
                     source.unlink(missing_ok=True)
     state = clear_documents()
     return jsonify({"settings": state.get("settings", {}), "documents": []})

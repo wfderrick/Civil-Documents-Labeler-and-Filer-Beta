@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import document_service
+from document_service import file_document_to_output
 
 
 def test_in_place_filing_preserves_path_and_name(tmp_path, monkeypatch):
@@ -20,7 +21,7 @@ def test_in_place_filing_preserves_path_and_name(tmp_path, monkeypatch):
 
     monkeypatch.setattr(document_service, "write_pdf_metadata", fake_write_pdf_metadata)
 
-    filed = document_service.file_document_to_output(
+    filed = file_document_to_output(
         document,
         tmp_path / "unused-output",
         in_place=True,

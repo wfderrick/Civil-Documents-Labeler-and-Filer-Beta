@@ -50,7 +50,7 @@ def _as_float_pair(value: Any) -> list[float] | None:
     try:
         if isinstance(value, (list, tuple)) and len(value) >= 2:
             return [float(value[0]), float(value[1])]
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
     return None
 
@@ -159,7 +159,7 @@ def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
                     points = _points_from_any(raw_item[0])
                     text = str(raw_item[1][0]).strip()
                     confidence = float(raw_item[1][1])
-                except Exception:
+                except Exception:  # noqa: BLE001, S112
                     continue
                 if text:
                     items.append(
@@ -291,7 +291,7 @@ def gpu_is_available() -> bool:
             paddle.device.is_compiled_with_cuda()
             and paddle.device.cuda.device_count() > 0
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
 
 
@@ -498,7 +498,10 @@ def ocr_pdf_batch(
         total = len(pdf_paths)
         for num, pdf_path in enumerate(pdf_paths, start=1):
             if progress_callback:
-                progress_callback(f"Document {num} of {total}: {pdf_path.name}")
+                if total > 1:
+                    progress_callback(f"Document {num} of {total}: {pdf_path.name}")
+                else:
+                    progress_callback(f"Document: {pdf_path.name}")
             full_ocr = ocr_pdf_with_layout(
                 pdf_path, ocr, dpi, progress_callback=progress_callback
             )
@@ -532,7 +535,7 @@ def ocr_pdf_batch(
         for future in as_completed(futures):
             index, result = future.result()
             indexed_results[index] = result
-            completed += 1
+            completed += 1  # noqa: SIM113
             if progress_callback:
                 progress_callback(
                     f"Completed document {completed} of {len(pdf_paths)}: "

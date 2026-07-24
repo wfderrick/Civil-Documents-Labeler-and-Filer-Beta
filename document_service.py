@@ -7,21 +7,23 @@ Maintenance notes:
 """
 
 from __future__ import annotations
+
 import os
 import shutil
 import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
 from metadata_extraction import ExtractedMetadata, safe_path_part, unique_path
 from pdf_processing import write_pdf_metadata
 from sdat import (
     LOOKUP_DOCUMENT_TYPE,
-    lookup_by_tax_id,
+    SDAT_METADATA_FIELDS,
     enrich_metadata_with_sdat,
+    lookup_by_tax_id,
     lookup_maryland_property_by_address,
     metadata_from_sdat_record,
-    SDAT_METADATA_FIELDS,
 )
 from state_store import load_config_from_state
 
@@ -315,32 +317,23 @@ def file_document_to_output(
     file_name: str | None = None,
     in_place: bool = False,
 ) -> dict[str, Any]:
-    """File document to output.
-    
-    Args:
-        document: Input used by this operation.
-        output_folder: Input used by this operation.
-        copy_file: Input used by this operation.
-        save_text: Input used by this operation.
-        folder_name: Input used by this operation.
-        file_name: Optional destination filename used during standard filing.
-        in_place: When true, preserve the source path and filename and replace
-            only the PDF contents after metadata is written successfully.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    
-    Notes:
-        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """The file_document_to_output() function places the given document in the
+    given output_folder, writes standard and XMP metadata,
+    adds a text layer onto the pdf, and updates the document parameter and 
+    returns it. The function begins by checking that the source PDF still
+    exists by checking that the source_path key in the document parameter is a
+    valid path. Then the function diverges into in-place saving and saving to
+    the given output.
+
+    In-place:  Build the updated PDF beside the source, then atomically replace
+    the original. A metadata-writing failure therefore leaves the source file
+    untouched instead of partially rewriting it.
     """
     source_path = Path(document["source_path"])
     if not source_path.exists():
         raise FileNotFoundError(f"Source PDF no longer exists: {source_path}")
 
     if in_place:
-        # Build the updated PDF beside the source, then atomically replace the
-        # original. A metadata-writing failure therefore leaves the source file
-        # untouched instead of partially rewriting it.
         temp_handle, temp_name = tempfile.mkstemp(
             prefix=f".{source_path.stem}_metadata_",
             suffix=source_path.suffix,

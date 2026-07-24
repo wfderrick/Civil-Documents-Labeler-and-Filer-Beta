@@ -7,6 +7,7 @@ Maintenance notes:
 """
 
 from __future__ import annotations
+
 import re
 
 _TAX_ID_RE = re.compile(r"^(\d{1,2})-(\d{4,8})$")

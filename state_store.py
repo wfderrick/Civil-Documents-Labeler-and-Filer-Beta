@@ -12,8 +12,9 @@ import copy
 import json
 import os
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from metadata_extraction import load_config
 

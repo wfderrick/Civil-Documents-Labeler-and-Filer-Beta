@@ -7,6 +7,7 @@ Maintenance notes:
 """
 
 from __future__ import annotations
+
 import csv
 from datetime import datetime
 from pathlib import Path
@@ -37,7 +38,9 @@ def append_batch_tracker(
         "lot_number": metadata.get("lot", ""),
         "address": metadata.get("address", ""),
         "location_filed": str(destination_folder),
-        "time_filed": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "time_filed": datetime.now()
+        .astimezone()
+        .isoformat(timespec="seconds"),
         "project_code": metadata.get("project_code", ""),
         "section": metadata.get("section", ""),
         "file_count": len(filed_documents),
@@ -48,7 +51,9 @@ def append_batch_tracker(
 
     TRACKER_DIR.mkdir(parents=True, exist_ok=True)
     fieldnames = list(row)
-    needs_header = not TRACKER_FILE.exists() or TRACKER_FILE.stat().st_size == 0
+    needs_header = (
+        not TRACKER_FILE.exists() or TRACKER_FILE.stat().st_size == 0
+    )
     with TRACKER_FILE.open("a", newline="", encoding="utf-8") as tracker:
         writer = csv.DictWriter(tracker, fieldnames=fieldnames)
         if needs_header:

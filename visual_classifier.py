@@ -8,18 +8,19 @@ Maintenance notes:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import fitz
 import numpy as np
-from dataclasses import replace
+
 from metadata_extraction import Config, ExtractedMetadata
 
 try:
     import joblib  # type: ignore[reportMissingImports]
-except Exception:  # pragma: no cover - optional dependency
+except Exception:  # pragma: no cover - optional dependency  # noqa: BLE001
     joblib = None
 
 MODEL_PATH = Path(__file__).resolve().parent / "visual_field_notes_classifier.joblib"
@@ -72,7 +73,7 @@ def render_page_gray(
                 pix.height, pix.width, 3
             )
             return image.mean(axis=2).astype(np.uint8)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -91,7 +92,7 @@ def pdf_page_count(pdf_path: Path) -> int:
     try:
         with fitz.open(pdf_path) as doc:
             return int(doc.page_count)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return 0
 
 
@@ -220,9 +221,15 @@ def train_visual_classifier(
         raise RuntimeError(
             "Install joblib and scikit-learn to train the visual classifier."
         )
-    from sklearn.ensemble import RandomForestClassifier  # type: ignore[reportMissingImports]
-    from sklearn.model_selection import train_test_split  # type: ignore[reportMissingImports]
-    from sklearn.metrics import classification_report  # type: ignore[reportMissingImports]
+    from sklearn.ensemble import (
+        RandomForestClassifier,  # type: ignore[reportMissingImports]
+    )
+    from sklearn.metrics import (
+        classification_report,  # type: ignore[reportMissingImports]
+    )
+    from sklearn.model_selection import (
+        train_test_split,  # type: ignore[reportMissingImports]
+    )
 
     root = Path(training_root)
     expected = {FIELD_NOTES_LABEL, NOT_FIELD_NOTES_LABEL}
@@ -289,7 +296,7 @@ def _field_notes_visual_threshold(config: Config) -> float:
     """
     try:
         return float(config.get("visual_field_notes_threshold", 0.70))
-    except Exception:
+    except Exception:  # noqa: BLE001
         return 0.70
 
 
