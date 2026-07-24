@@ -1,8 +1,12 @@
 from pathlib import Path
 
+from app import _folder_project_and_section
 
-def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
-    """
+"""Can't import app.py to test function inside because the paddlepaddle-gpu
+version being used is not stored in pip yet. """
+
+"""def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
+    
     Extract the project code and section name from an output folder.
 
     Expected folder format:
@@ -21,7 +25,7 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
 
     Any text after the first '-' is ignored because it is treated as a
     descriptive suffix rather than part of the section identifier.
-    """
+    
     name = output_folder.name.strip()
 
     if "." not in name:
@@ -30,7 +34,7 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     project_code, section = name.split(".", 1)
     section = section.split("-", 1)[0]
 
-    return project_code.strip(), section.strip()
+    return project_code.strip(), section.strip()"""
 
 
 def test_folder_project_and_section_empty():
@@ -48,7 +52,7 @@ def test_folder_project_and_section_section_no_extra():
 def test_folder_project_and_section_extra():
     assert _folder_project_and_section(Path("CC6767.67 - werwfwfwg")) == (
         "CC6767",
-        "67",
+        "67"
     )
 
 

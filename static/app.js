@@ -20,6 +20,7 @@ const fields = {
   dpi: $('dpi'),
   ocrDevice: $('ocrDevice'),
   scanMode: $('scanMode'),
+  inPlace: $('inPlace'),
   lot: $('lot'),
   address: $('address'),
   taxMap: $('taxMap'),
@@ -655,6 +656,8 @@ function applyState(data, options = {}) {
   fields.dpi.value = state.settings.dpi || 300;
   if (fields.ocrDevice) fields.ocrDevice.value = state.settings.ocr_device || 'auto';
   if (fields.scanMode) fields.scanMode.value = state.settings.scan_mode || 'batch';
+  if (fields.inPlace) fields.inPlace.checked = Boolean(state.settings.in_place);
+  updateInPlaceInterface();
 
   if (!state.documents.some((document) => document.id === state.selectedId)) {
     state.selectedId = state.documents[0]?.id || null;
@@ -706,6 +709,7 @@ function scanPayload() {
     dpi: Number(fields.dpi.value),
     ocr_device: fields.ocrDevice ? fields.ocrDevice.value : 'auto',
     scan_mode: fields.scanMode ? fields.scanMode.value : 'batch',
+    in_place: fields.inPlace ? fields.inPlace.checked : false,
   };
 }
 
@@ -852,6 +856,7 @@ async function fileCurrent() {
         output_folder: fields.outputFolder.value,
         copy: fields.copyFile.checked,
         save_text: fields.saveText.checked,
+        in_place: fields.inPlace ? fields.inPlace.checked : false,
       }),
     });
 
@@ -859,7 +864,7 @@ async function fileCurrent() {
     // removed. applyState keeps the current selection when possible and selects
     // the next available document when the filed document was active.
     applyState(filed);
-    showToast(`Filed to ${filed.filed?.filed_path || 'the output folder'}`);
+    showToast(fields.inPlace?.checked ? 'Metadata saved to the original PDF.' : `Filed to ${filed.filed?.filed_path || 'the output folder'}`);
   } catch (error) {
     showToast(error.message, true);
   }
@@ -879,11 +884,12 @@ async function fileAll() {
         output_folder: fields.outputFolder.value,
         copy: fields.copyFile.checked,
         save_text: fields.saveText.checked,
+        in_place: fields.inPlace ? fields.inPlace.checked : false,
       }),
     });
 
     applyState(data);
-    showToast(`Filed ${state.documents.length} PDF${state.documents.length === 1 ? '' : 's'} as one batch.`);
+    showToast(fields.inPlace?.checked ? 'Metadata saved to the original PDFs.' : `Filed ${state.documents.length} PDF${state.documents.length === 1 ? '' : 's'} as one batch.`);
     state.documents = []
     renderList()
   } catch (error) {
@@ -921,12 +927,26 @@ function registerAutoSave(ids, autoFolder, autoFileName) {
 
 registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'section', 'editProjectCode', 'editDocumentType'], true, true);
 
+
+function updateInPlaceInterface() {
+  const enabled = Boolean(fields.inPlace?.checked);
+  fields.outputFolder.disabled = enabled;
+  const browseButton = document.querySelector(
+    'button[onclick="openFolderBrowser(\'outputFolder\')"]'
+  );
+  if (browseButton) browseButton.disabled = enabled;
+  fields.copyFile.disabled = enabled;
+  if (enabled) closeFolderBrowser('outputFolder');
+}
+
 fields.outputFolder.addEventListener('change', () => {
   if (!state.documents.length) return;
   saveOutputFolder()
     .then(() => showToast('Output folder updated for the current batch.'))
     .catch((error) => showToast(error.message, true));
 });
+
+if (fields.inPlace) fields.inPlace.addEventListener('change', updateInPlaceInterface);
 
 /*Calls the scan() function whenever the Scan PDF's button is clicked.*/
 $('scanButton').addEventListener('click', scan);

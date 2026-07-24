@@ -127,6 +127,7 @@ def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "ocr_workers": 1,
         "ocr_threads_per_worker": 4,
         "scan_mode": (payload.get("scan_mode") or "batch").strip().lower(),
+        "in_place": bool(payload.get("in_place", False)),
     }
 
 
@@ -335,6 +336,10 @@ def scan_mass(
 
 def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     """
+    NOTE: THE TESTING FOR THIS FUNCTION RELIES ON A COPY IN ``app_test.py`` SO
+    IF YOU MAKE CHANGES TO THIS FUNCTION COPY THE CHANGES OVER TO THE
+    ``app_test.py`` FILE.
+
     Extract the project code and section name from an output folder.
 
     Expected folder format:
@@ -363,7 +368,6 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     section = section.split("-", 1)[0]
 
     return project_code.strip(), section.strip()
-    
 
 
 """--------------------------------------------------------------------------"""
@@ -496,7 +500,6 @@ def api_scan_progress():
     return jsonify(scan_progress_snapshot())
 
 
-
 @app.post("/api/scan")
 def api_scan():
     """The api_scan() function controls the scanning process for the pdf
@@ -511,7 +514,12 @@ def api_scan():
     add_scan_progress("Starting scan request.")
     settings = scan_settings(json_payload())
     input_folder = Path(settings["input_folder"])
-    output_folder = Path(settings["output_folder"])
+    in_place = bool(settings.get("in_place", False))
+    output_folder = (
+        Path(settings["output_folder"])
+        if settings["output_folder"]
+        else input_folder
+    )
 
     # Ensures that the given input and output folders are in settings and that
     # input is a directory. If not a Response object is returned with an error
@@ -522,11 +530,11 @@ def api_scan():
             failed=True, message="Scan failed: Input folder is required."
         )
         return api_error("Input folder is required.", 400)
-    if not settings["output_folder"]:
+    if not in_place and not settings["output_folder"]:
         finish_scan_progress(
-            failed=True, message="Scan failed: Output folder is required."
+            failed=True, message="Scan failed: Output folder is required unless In-Place is enabled."
         )
-        return api_error("Output folder is required.", 400)
+        return api_error("Output folder is required unless In-Place is enabled.", 400)
     if not input_folder.is_dir():
         finish_scan_progress(
             failed=True,
@@ -534,7 +542,8 @@ def api_scan():
         )
         return api_error(f"Input folder not found: {input_folder}", 400)
 
-    output_folder.mkdir(parents=True, exist_ok=True)
+    if not in_place:
+        output_folder.mkdir(parents=True, exist_ok=True)
 
     # Gets the path to the config file if one is given.
     config_path = (
@@ -550,8 +559,9 @@ def api_scan():
 
     # Gets the project code and section from the output folder name. Then updates
     # the section in settins to match the detected section.
+    naming_folder = input_folder if in_place else output_folder
     detected_project_code, detected_section = _folder_project_and_section(
-        output_folder
+        naming_folder
     )
     config["default_county"] = settings.get("county", "")
 
@@ -636,7 +646,7 @@ def api_update_document(document_id: str):
     """The api_update_document() function returns a Response object with the
     updated settings and document matching ``document_id`` which was updated and
     is now stored in documents.json. First the payload from the PATCH request is
-    extracted via the ``json_payload()`` function. """
+    extracted via the ``json_payload()`` function."""
     payload = json_payload()
     try:
         state, updated = update_document(
@@ -662,13 +672,13 @@ def api_update_document(document_id: str):
 @app.post("/api/documents/<document_id>/file")
 def api_file_document(document_id: str):
     """Api file document.
-    
+
     Args:
         document_id: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
-    
+
     Notes:
         Errors are handled or propagated according to the surrounding scan/API workflow.
     """
@@ -683,13 +693,18 @@ def api_file_document(document_id: str):
             400,
         )
 
-    try:
-        state, output_folder = update_output_folder(
-            payload.get("output_folder")
-            or state.get("settings", {}).get("output_folder", "")
-        )
-    except (OSError, ValueError) as error:
-        return api_error(str(error), 400)
+    in_place = bool(
+        payload.get("in_place", state.get("settings", {}).get("in_place", False))
+    )
+    output_folder = Path(state.get("settings", {}).get("output_folder") or ".")
+    if not in_place:
+        try:
+            state, output_folder = update_output_folder(
+                payload.get("output_folder")
+                or state.get("settings", {}).get("output_folder", "")
+            )
+        except (OSError, ValueError) as error:
+            return api_error(str(error), 400)
 
     try:
         filed = file_document_to_output(
@@ -699,6 +714,7 @@ def api_file_document(document_id: str):
             save_text=payload.get("save_text", False),
             folder_name=payload.get("folder_name"),
             file_name=payload.get("file_name"),
+            in_place=in_place,
         )
     except FileNotFoundError:
         return api_error(
@@ -721,22 +737,27 @@ def api_file_document(document_id: str):
 @app.post("/api/file-all")
 def api_file_all_documents():
     """Api file all documents.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
-    
+
     Notes:
         Errors are handled or propagated according to the surrounding scan/API workflow.
     """
     payload = request.get_json(silent=True) or {}
     state = read_state()
-    try:
-        state, output_folder = update_output_folder(
-            payload.get("output_folder")
-            or state.get("settings", {}).get("output_folder", "")
-        )
-    except (OSError, ValueError) as error:
-        return api_error(str(error), 400)
+    in_place = bool(
+        payload.get("in_place", state.get("settings", {}).get("in_place", False))
+    )
+    output_folder = Path(state.get("settings", {}).get("output_folder") or ".")
+    if not in_place:
+        try:
+            state, output_folder = update_output_folder(
+                payload.get("output_folder")
+                or state.get("settings", {}).get("output_folder", "")
+            )
+        except (OSError, ValueError) as error:
+            return api_error(str(error), 400)
     documents = state.get("documents", [])
     normal_documents = [
         doc for doc in documents if not doc.get("is_lookup_document")
@@ -759,31 +780,34 @@ def api_file_all_documents():
                     copy_file=payload.get("copy", False),
                     save_text=payload.get("save_text", False),
                     folder_name=shared_folder,
+                    in_place=in_place,
                 )
             )
     except FileNotFoundError as error:
         return api_error(str(error), 400)
 
-    try:
-        append_batch_tracker(normal_documents, output_folder, filed_documents)
-    except OSError as error:
-        return api_error(
-            f"Documents were filed, but the tracker could not be updated: \
-            {error}",
-            500,
-        )
+    if not in_place:
+        try:
+            append_batch_tracker(normal_documents, output_folder, filed_documents)
+        except OSError as error:
+            return api_error(
+                f"Documents were filed, but the tracker could not be updated: \
+                {error}",
+                500,
+            )
 
-    # Delete lookup-only source records only after every permanent document
-    # succeeds.
-    for lookup in lookup_documents:
-        source = Path(lookup.get("source_path", ""))
-        if source.exists():
-            try:
-                from send2trash import send2trash
+    # Standard filing removes lookup-only helper PDFs after the permanent
+    # documents succeed. In-Place mode preserves every scanned source file.
+    if not in_place:
+        for lookup in lookup_documents:
+            source = Path(lookup.get("source_path", ""))
+            if source.exists():
+                try:
+                    from send2trash import send2trash
 
-                send2trash(str(source))
-            except Exception:
-                source.unlink(missing_ok=True)
+                    send2trash(str(source))
+                except Exception:
+                    source.unlink(missing_ok=True)
     state = clear_documents()
     return jsonify({"settings": state.get("settings", {}), "documents": []})
 

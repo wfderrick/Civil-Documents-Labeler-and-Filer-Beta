@@ -7,7 +7,9 @@ Maintenance notes:
 """
 
 from __future__ import annotations
+import os
 import shutil
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -311,6 +313,7 @@ def file_document_to_output(
     save_text: bool = False,
     folder_name: str | None = None,
     file_name: str | None = None,
+    in_place: bool = False,
 ) -> dict[str, Any]:
     """File document to output.
     
@@ -320,7 +323,9 @@ def file_document_to_output(
         copy_file: Input used by this operation.
         save_text: Input used by this operation.
         folder_name: Input used by this operation.
-        file_name: Input used by this operation.
+        file_name: Optional destination filename used during standard filing.
+        in_place: When true, preserve the source path and filename and replace
+            only the PDF contents after metadata is written successfully.
     
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
@@ -331,6 +336,37 @@ def file_document_to_output(
     source_path = Path(document["source_path"])
     if not source_path.exists():
         raise FileNotFoundError(f"Source PDF no longer exists: {source_path}")
+
+    if in_place:
+        # Build the updated PDF beside the source, then atomically replace the
+        # original. A metadata-writing failure therefore leaves the source file
+        # untouched instead of partially rewriting it.
+        temp_handle, temp_name = tempfile.mkstemp(
+            prefix=f".{source_path.stem}_metadata_",
+            suffix=source_path.suffix,
+            dir=source_path.parent,
+        )
+        os.close(temp_handle)
+        temp_path = Path(temp_name)
+        try:
+            shutil.copy2(source_path, temp_path)
+            write_pdf_metadata(temp_path, document)
+            os.replace(temp_path, source_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        if save_text:
+            source_path.with_suffix(".txt").write_text(
+                document.get("ocr_text", ""), encoding="utf-8"
+            )
+
+        document.update(
+            {
+                "filed_path": str(source_path),
+                "status": "filed",
+            }
+        )
+        return document
 
     resolved_folder = safe_path_part(
         folder_name or document.get("folder_name", ""),

@@ -1,3 +1,34 @@
+from __future__ import annotations
+
+import re
+from collections import Counter
+from collections.abc import Iterable, Mapping
+from dataclasses import replace
+from typing import Any
+
+from metadata_extraction import (
+    Config,
+    ExtractedMetadata,
+    extract_metadata,
+    is_known_value,
+    normalize_for_fuzzy,
+    prefer_known,
+    safe_path_part,
+)
+from sdat import (
+    LOOKUP_DOCUMENT_TYPE,
+    SDAT_METADATA_FIELDS,
+    SdatSearchTerms,
+    format_sdat_address,
+    lookup_by_tax_id,
+    lookup_maryland_property_by_address,
+    lookup_maryland_property_records,
+    metadata_from_sdat_record,
+)
+from visual_classifier import (
+    fix_duplicate_document_types_with_visual_classifier,
+)
+
 """High-level scan pipeline. This module orchestrates PDF discovery, page OCR, metadata extraction, batch voting, SDAT enrichment, output naming, and creation of the document records consumed by the review interface.
 
 Maintenance notes:
@@ -5,36 +36,6 @@ Maintenance notes:
     update the relevant tests and the project README so scan and review workflows
     remain understandable to future maintainers.
 """
-
-from __future__ import annotations
-import re
-from collections import Counter
-from dataclasses import replace
-from typing import Any, Iterable, Mapping
-
-# Public facade imports preserve the original pipeline API for app.py and callers.
-from metadata_extraction import (
-    Config,
-    ExtractedMetadata,
-    extract_metadata,
-    normalize_for_fuzzy,
-    prefer_known,
-    safe_path_part,
-    is_known_value,
-)
-from sdat import (
-    LOOKUP_DOCUMENT_TYPE,
-    SdatSearchTerms,
-    lookup_by_tax_id,
-    lookup_maryland_property_by_address,
-    lookup_maryland_property_records,
-    metadata_from_sdat_record,
-    format_sdat_address,
-    SDAT_METADATA_FIELDS,
-)
-from visual_classifier import fix_duplicate_document_types_with_visual_classifier
-
-
 def vote_key(value: str) -> str:
     """Vote key.
     

@@ -200,3 +200,13 @@ python -m compileall -q .
 ### Commenting conventions
 
 Comments in this project explain intent, data ownership, safety constraints, and non-obvious edge cases. They should not merely repeat the next line of code. Function docstrings describe inputs, outputs, side effects, and workflow context. When behavior changes, update the associated comments and tests in the same change so the documentation remains trustworthy.
+
+
+## In-Place filing
+
+Enable **In-Place** in the Settings panel to preserve each source PDF's current
+folder and filename. Filing then writes the extracted SDAT fields, standard PDF
+metadata, custom XMP metadata, and searchable OCR layer to a temporary copy in
+the same directory before atomically replacing the original file. The output
+folder, generated filing folder, generated filename, copy option, batch tracker,
+and lookup-document deletion are bypassed in this mode.

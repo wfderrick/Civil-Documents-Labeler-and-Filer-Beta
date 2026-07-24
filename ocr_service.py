@@ -7,18 +7,21 @@ Maintenance notes:
 """
 
 from __future__ import annotations
+
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+
 import fitz
 
 try:
     import paddle
-except Exception:
+except Exception:  # noqa: BLE001
     paddle = None
 from paddleocr import PaddleOCR
 
