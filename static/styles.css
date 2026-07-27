@@ -1265,3 +1265,22 @@ select:focus {
   background: #fffafa !important;
   color: #7a1616 !important;
 }
+
+
+/* Custom document type entry shown when Custom is selected. */
+.custom-document-type-control {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.custom-document-type-control span {
+  font-size: 12px;
+  font-weight: 700;
+  color: #5c7899;
+}
+.custom-document-type-control input {
+  width: 100%;
+  min-height: 42px;
+  box-sizing: border-box;
+}
+.custom-document-type-control.hidden { display: none; }

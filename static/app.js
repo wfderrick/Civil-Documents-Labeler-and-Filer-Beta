@@ -29,6 +29,7 @@ const fields = {
   section: $('section'),
   editProjectCode: $('editProjectCode'),
   editDocumentType: $('editDocumentType'),
+  customDocumentType: $('customDocumentType'),
   copyFile: $('copyFile'),
   saveText: $('saveText'),
 };
@@ -597,7 +598,17 @@ function renderSelectedDocument(document) {
   fields.taxId.value = document.metadata.tax_id || '';
   fields.section.value = document.metadata.section || '';
   fields.editProjectCode.value = document.metadata.project_code || '';
-  if (fields.editDocumentType) fields.editDocumentType.value = document.metadata.document_type || 'Field Notes';
+  if (fields.editDocumentType) {
+    const documentType = String(document.metadata.document_type || 'Field Notes').trim();
+    const knownOption = Array.from(fields.editDocumentType.options)
+      .some((option) => option.value === documentType);
+
+    fields.editDocumentType.value = knownOption ? documentType : '__custom__';
+    if (fields.customDocumentType) {
+      fields.customDocumentType.value = knownOption ? '' : documentType;
+    }
+    updateCustomDocumentTypeInterface();
+  }
   renderMissingMetadataHighlights(document);
   $('fileButton').disabled = document.status === 'filed' || document.is_lookup_document;
   $('fileButton').title = document.is_lookup_document
@@ -728,7 +739,11 @@ function updatePayload(autoFolder = false, autoFileName = false, changedField = 
     tax_id: fields.taxId.value,
     section: fields.section.value,
     project_code: fields.editProjectCode.value,
-    document_type: fields.editDocumentType ? fields.editDocumentType.value : '',
+    document_type: fields.editDocumentType
+      ? (fields.editDocumentType.value === '__custom__'
+        ? String(fields.customDocumentType?.value || '').trim()
+        : fields.editDocumentType.value)
+      : '',
     folder_name: selectedDocument()?.folder_name || '',
     file_name: selectedDocument()?.file_name || '',
     auto_folder: autoFolder,
@@ -925,7 +940,44 @@ function registerAutoSave(ids, autoFolder, autoFileName) {
   });
 }
 
-registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'section', 'editProjectCode', 'editDocumentType'], true, true);
+registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'section', 'editProjectCode'], true, true);
+
+function updateCustomDocumentTypeInterface() {
+  if (!fields.editDocumentType || !fields.customDocumentType) return;
+
+  const isCustom = fields.editDocumentType.value === '__custom__';
+  const control = $('customDocumentTypeControl');
+  if (control) control.classList.toggle('hidden', !isCustom);
+  fields.customDocumentType.disabled = !isCustom;
+  fields.customDocumentType.required = isCustom;
+
+  if (isCustom) {
+    window.requestAnimationFrame(() => fields.customDocumentType.focus());
+  }
+}
+
+if (fields.editDocumentType) {
+  fields.editDocumentType.addEventListener('change', () => {
+    updateCustomDocumentTypeInterface();
+    if (fields.editDocumentType.value !== '__custom__') {
+      saveCurrent(true, true, 'document_type')
+        .catch((error) => showToast(error.message, true));
+    }
+  });
+}
+
+if (fields.customDocumentType) {
+  fields.customDocumentType.addEventListener('change', () => {
+    const customType = fields.customDocumentType.value.trim();
+    if (!customType) {
+      showToast('Enter a custom document type before saving.', true);
+      fields.customDocumentType.focus();
+      return;
+    }
+    saveCurrent(true, true, 'document_type')
+      .catch((error) => showToast(error.message, true));
+  });
+}
 
 
 function updateInPlaceInterface() {
