@@ -640,12 +640,26 @@ def api_scan():
     return jsonify(final_state)
 
 
+"""
+@app.post("/api/scan")
+async def api_scan_trigger():
+    task = asyncio.create_task(api_scan())
+    await task
+    return jsonify(read_state())
+"""
+
+
 @app.patch("/api/documents/<document_id>")
 def api_update_document(document_id: str):
     """The api_update_document() function returns a Response object with the
     updated settings and document matching ``document_id`` which was updated and
     is now stored in documents.json. First the payload from the PATCH request is
-    extracted via the ``json_payload()`` function."""
+    extracted via the ``json_payload()`` function. The up to date state and
+    document are returned by the ``update_document()`` function which applies
+    the given changes from the payload. If a KeyError is thrown it is caught and
+    returned as a Response object to the browser with error code 400. If it
+    succeeds a Response object is returned with the updated settings, documents,
+    and the updated document via ``jsonify()``."""
     payload = json_payload()
     try:
         state, updated = update_document(

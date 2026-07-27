@@ -40,12 +40,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         r"\bmap\s*/\s*parcel\s*[:#-]?\s*[0-9A-Za-z]+\s*/\s*([0-9A-Za-z]+)\b",
     ],
     "tax_id_patterns": [
-        r"\btax\s*(?:id|i\.?d\.?|1\.?d\.?)\s*[:#.-]?\s*",
-        r"([0-9Oo]{1,2})\s*[- ]\s*([0-9OoIl]{4,8})\b",
+        r"\btax\s*(?:id|i\.?d\.?|1\.?d\.?)\s*[:#.-]?\s*([0-9Oo]{1,2})\s*[- ]\s*([0-9OoIl]{4,8})\b",
     ],
     "district_patterns": [
-        r"\bdistrict\s*[:#-]?\s*([0-9A-Za-z]+)\b",
-        r"\bdist\.?\s*[:#-]?\s*([0-9A-Za-z]+)\b",
+        r"\bdistrict\s*[:#-]?\s*([0-9A-Za-z]+)\b\bdist\.?\s*[:#-]?\s*([0-9A-Za-z]+)\b",
     ],
     "account_patterns": [
         r"\baccount\s*(?:number|no\.?|#)?\s*[:#-]?\s*([0-9A-Za-z]+)\b",
@@ -81,13 +79,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "location drawing",
         ],
         "Site Plan": ["site plan", "siteplan", "plot plan", "sitemap"],
-        "Wall Check": ["wall check", "wallcheck", "wall chk", "foundation check"],
+        "Wall Check": [
+            "wall check",
+            "wallcheck",
+            "wall chk",
+            "foundation check",
+        ],
         "Plat/Replat": [
             "forest conservation amendment plat",
             "replat",
             "re plat",
         ],
-        "Construction Permit": ["septic construction permit", "construction permit"],
+        "Construction Permit": [
+            "septic construction permit",
+            "construction permit",
+        ],
         "Field Notes": ["field notes", "fieldnotes", "field note", "notes"],
     },
     "document_type_regex_rules": {
@@ -182,8 +188,8 @@ class ExtractedMetadata:
 
 @dataclass(frozen=True)
 class FuzzyMatch:
-    """Represent FuzzyMatch behavior and related state.
-    """
+    """Represent FuzzyMatch behavior and related state."""
+
     label: str
     score: float
     start: int
@@ -236,16 +242,21 @@ def first_match(
     text: str, patterns: Iterable[str], *, normalize_numbers: bool = False
 ) -> str | None:
     """Return the first regex capture, optionally fixing OCR digit/letter mistakes first."""
-    search_text = normalize_ocr_numbers(text) if normalize_numbers else str(text or "")
+    search_text = (
+        normalize_ocr_numbers(text) if normalize_numbers else str(text or "")
+    )
 
     for pattern in patterns:
-        match = re.search(pattern, search_text, flags=re.IGNORECASE | re.MULTILINE)
+        match = re.search(
+            pattern, search_text, flags=re.IGNORECASE | re.MULTILINE
+        )
         if not match:
             continue
 
         if match.lastindex and match.lastindex > 1:
             return "-".join(
-                normalize_value(match.group(i)) for i in range(1, match.lastindex + 1)
+                normalize_value(match.group(i))
+                for i in range(1, match.lastindex + 1)
             )
 
         return normalize_value(match.group(1))
@@ -257,7 +268,9 @@ def all_matches(
     text: str, patterns: Iterable[str], *, normalize_numbers: bool = False
 ) -> list[str]:
     """Return all regex captures, optionally fixing OCR digit/letter mistakes first."""
-    search_text = normalize_ocr_numbers(text) if normalize_numbers else str(text or "")
+    search_text = (
+        normalize_ocr_numbers(text) if normalize_numbers else str(text or "")
+    )
     values: list[str] = []
 
     for pattern in patterns:
@@ -293,16 +306,12 @@ def safe_path_part(value: str, fallback: str) -> str:
 
 
 def unique_path(path: Path) -> Path:
-    """Unique path.
-    
-    Args:
-        path: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    
-    Notes:
-        Errors are handled or propagated according to the surrounding scan/API workflow.
+    """The ``unique_path()`` function checks that the given path already exists.
+    If it doesn't the path is returned as is. If it does the function loops
+    through possible paths by adding a number in between the path stem and
+    suffix which loops from 2 to 9999 to attempt to create a unique path. Once a
+    unique path is found it is returned. If one if never found a
+    ``RuntimeError`` is thrown.
     """
     if not path.exists():
         return path
@@ -315,10 +324,10 @@ def unique_path(path: Path) -> Path:
 
 def normalize_for_fuzzy(value: str) -> str:
     """Normalize for fuzzy.
-    
+
     Args:
         value: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -327,10 +336,10 @@ def normalize_for_fuzzy(value: str) -> str:
 
 def keyword_groups(raw_keywords: Any) -> dict[str, list[str]]:
     """Keyword groups.
-    
+
     Args:
         raw_keywords: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -348,7 +357,9 @@ def keyword_groups(raw_keywords: Any) -> dict[str, list[str]]:
     return {}
 
 
-def best_keyword_window(keyword: str, normalized_text: str) -> tuple[float, int, int]:
+def best_keyword_window(
+    keyword: str, normalized_text: str
+) -> tuple[float, int, int]:
     """Return the best fuzzy keyword window while preserving legacy tie behavior.
 
     Window lengths remain in ascending order and scores still use a strict ``>``
@@ -471,11 +482,11 @@ def fuzzy_document_type(
 
 def is_ignored_address(address: str, config: Config) -> bool:
     """Is ignored address.
-    
+
     Args:
         address: Input used by this operation.
         config: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -495,7 +506,9 @@ def is_ignored_address(address: str, config: Config) -> bool:
     )
 
 
-def _ocr_item_rect(item: Mapping[str, Any]) -> tuple[float, float, float, float] | None:
+def _ocr_item_rect(
+    item: Mapping[str, Any],
+) -> tuple[float, float, float, float] | None:
     """Return an OCR item's rectangle as x0, y0, x1, y1."""
     raw = first_nonempty_value(item.get("bbox"), item.get("polygon"))
     if raw is None:
@@ -571,7 +584,10 @@ def _layout_address_lines(
 
         for row in sorted(rows, key=lambda value: value["center_y"]):
             line = " ".join(
-                text for _, text in sorted(row["tokens"], key=lambda token: token[0])
+                text
+                for _, text in sorted(
+                    row["tokens"], key=lambda token: token[0]
+                )
             )
             line = normalize_value(line)
             if line:
@@ -587,11 +603,15 @@ def first_valid_address(
     """Return a plausible address, preferring bounding-box reconstructed lines."""
     if ocr_pages:
         try:
-            bottom_fraction = float(config.get("bbox_address_bottom_fraction", 0.65))
+            bottom_fraction = float(
+                config.get("bbox_address_bottom_fraction", 0.65)
+            )
         except (TypeError, ValueError):
             bottom_fraction = 0.65
         try:
-            line_tolerance = float(config.get("bbox_address_line_tolerance", 0.75))
+            line_tolerance = float(
+                config.get("bbox_address_line_tolerance", 0.75)
+            )
         except (TypeError, ValueError):
             line_tolerance = 0.75
 
@@ -600,7 +620,9 @@ def first_valid_address(
             bottom_fraction=bottom_fraction,
             line_tolerance=line_tolerance,
         ):
-            for address in all_matches(line, config.get("address_patterns", [])):
+            for address in all_matches(
+                line, config.get("address_patterns", [])
+            ):
                 if address and not is_ignored_address(address, config):
                     return address
 
@@ -613,13 +635,13 @@ def first_valid_address(
 
 def _points_from_any(value: Any) -> list[list[float]]:
     """Points from any.
-    
+
     Args:
         value: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
-    
+
     Notes:
         Errors are handled or propagated according to the surrounding scan/API workflow.
     """
@@ -637,10 +659,10 @@ def _points_from_any(value: Any) -> list[list[float]]:
 
 def _bbox_from_points(points: list[list[float]]) -> list[float]:
     """Bbox from points.
-    
+
     Args:
         points: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -653,10 +675,10 @@ def _bbox_from_points(points: list[list[float]]) -> list[float]:
 
 def first_nonempty_value(*values: Any) -> Any:
     """First nonempty value.
-    
+
     Args:
         *values: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -668,10 +690,10 @@ def first_nonempty_value(*values: Any) -> Any:
 
 def is_known_value(value: str) -> bool:
     """Is known value.
-    
+
     Args:
         value: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -691,14 +713,14 @@ def extract_metadata(
     ocr_pages: Iterable[Mapping[str, Any]] | None = None,
 ) -> ExtractedMetadata:
     """Extract metadata.
-    
+
     Args:
         text: Input used by this operation.
         config: Input used by this operation.
         default_project_code: Input used by this operation.
         default_document_type: Input used by this operation.
         ocr_pages: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -719,9 +741,13 @@ def extract_metadata(
             tax_id=tax_id,
         )
 
-    doc_match = regex_document_type(text, config.get("document_type_regex_rules"))
+    doc_match = regex_document_type(
+        text, config.get("document_type_regex_rules")
+    )
     if doc_match is None:
-        doc_match = fuzzy_document_type(text, config.get("document_type_keywords"))
+        doc_match = fuzzy_document_type(
+            text, config.get("document_type_keywords")
+        )
     document_type = (
         doc_match.label
         if doc_match
@@ -731,16 +757,26 @@ def extract_metadata(
     )
     # Preserve the original lot technique: search only after the detected document type.
     lot_search_text = text[doc_match.start :] if doc_match else text
-    lot = first_match(lot_search_text, config.get("lot_pattern", [])) or "Unknown Lot"
+    lot = (
+        first_match(lot_search_text, config.get("lot_pattern", []))
+        or "Unknown Lot"
+    )
     tax_map = (
-        first_match(text, config.get("map_patterns", []), normalize_numbers=False) or ""
+        first_match(
+            text, config.get("map_patterns", []), normalize_numbers=False
+        )
+        or ""
     )
     parcel = (
-        first_match(text, config.get("parcel_patterns", []), normalize_numbers=True)
+        first_match(
+            text, config.get("parcel_patterns", []), normalize_numbers=True
+        )
         or ""
     )
     tax_id = (
-        first_match(text, config.get("tax_id_patterns", []), normalize_numbers=True)
+        first_match(
+            text, config.get("tax_id_patterns", []), normalize_numbers=True
+        )
         or ""
     )
     return ExtractedMetadata(
@@ -765,11 +801,11 @@ def extract_metadata(
 
 def prefer_known(value: str, fallback: str) -> str:
     """Prefer known.
-    
+
     Args:
         value: Input used by this operation.
         fallback: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -778,10 +814,10 @@ def prefer_known(value: str, fallback: str) -> str:
 
 def normalize_identifier(value: Any) -> str:
     """Normalize identifier.
-    
+
     Args:
         value: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -793,11 +829,11 @@ def identifier_options(
     value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)
 ) -> list[str]:
     """Identifier options.
-    
+
     Args:
         value: Input used by this operation.
         widths: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """

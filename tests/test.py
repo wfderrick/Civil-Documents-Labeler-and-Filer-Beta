@@ -1,4 +1,4 @@
-import requests
+"""import requests
 
 OPENDATAMD_API_URL = "https://opendata.maryland.gov/resource/ed4q-f8tm.json"
 
@@ -12,7 +12,7 @@ response = requests.get(
 
 prop_dict = response.json()
 for key in prop_dict[0].keys():  # noqa: SIM118
-    print(f"Field:{key},     Value:{prop_dict[0].get(key)}")
+    print(f"Field:{key},     Value:{prop_dict[0].get(key)}")"""
 
 """import pikepdf
 
@@ -22,3 +22,10 @@ with pdf.open_metadata() as meta:
     for key, value in meta.items():
         print(key, value)
 """
+
+from pathlib import Path
+
+source_path = Path("").cwd()
+source_path = Path(f"{source_path}.pdf")
+print(Path(source_path.stem))
+print(source_path.name)

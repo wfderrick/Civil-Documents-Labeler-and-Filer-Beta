@@ -1,197 +1,318 @@
 <!doctype html>
 <html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PaddleOCR Review Queue</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css') }}?v=20260721-9"
+    />
+  </head>
 
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PaddleOCR Review Queue</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20260721-9">
-</head>
-
-<body>
+  <body>
     <!-- COABarrett application shell. Most content is populated and synchronized by
          static/app.js; element IDs therefore form a contract with the JavaScript. -->
-<header class="app-header">
-    <div>
-      <h1>Document Review Queue</h1>
-      <p>Review OCR metadata, choose filing folders, and edit final PDF names before filing.</p>
-    </div>
-    <div class="header-actions">
-      <button id="scanButton" class="primary">Scan PDFs</button>
-      <button id="fileAllButton">File Batch</button>
-    </div>
-  </header>
-
-  <section id="scanProgressPanel" class="scan-progress-panel hidden" aria-live="polite">
-    <div class="scan-progress-header">
+    <header class="app-header">
       <div>
-        <h2>Scan Progress</h2>
-        <p id="scanProgressStatus">Preparing scan...</p>
+        <h1>Document Review Queue</h1>
+        <p>
+          Review OCR metadata, choose filing folders, and edit final PDF names
+          before filing.
+        </p>
       </div>
-      <span id="scanElapsed">0.0 s</span>
-    </div>
-    <div class="scan-progress-bar"><div id="scanProgressBar"></div></div>
-    <div id="scanProgressMessages" class="scan-progress-messages"></div>
-  </section>
-
-  <main class="layout">
-    <aside class="sidebar">
-      <section class="panel settings-panel">
-        <div class="settings-panel-heading">
-          <h2>Settings</h2>
-        </div>
-
-        <div class="settings-section settings-folder-section">
-
-          <div class="folder-field-group settings-card settings-card-featured">
-            <label for="inputFolder"><span>Input folder</span><input id="inputFolder" type="text" placeholder="S:"></label>
-            <button type="button" class="settings-browse-button" onclick="openFolderBrowser('inputFolder')">Browse input</button>
-            <div id="inputFolderBrowser" class="folder-browser hidden">
-              <div class="folder-browser-header">
-                <h3>Select Input Folder</h3>
-                <button type="button" class="folder-browser-close" onclick="closeFolderBrowser('inputFolder')" aria-label="Close input folder browser">×</button>
-              </div>
-              <div id="inputBrowseCurrentPath" class="browse-current-path"></div>
-              <div id="inputBrowseFolderList" class="browse-folder-list"></div>
-              <button type="button" id="inputUseFolderButton" class="primary">Use this folder</button>
-            </div>
-          </div>
-
-          <div class="folder-field-group settings-card settings-card-featured">
-            <label for="outputFolder"><span>Output folder</span><input id="outputFolder" type="text" placeholder="S:"></label>
-            <button type="button" class="settings-browse-button" onclick="openFolderBrowser('outputFolder')">Browse output</button>
-            <div id="outputFolderBrowser" class="folder-browser hidden">
-              <div class="folder-browser-header">
-                <h3>Select Output Folder</h3>
-                <button type="button" class="folder-browser-close" onclick="closeFolderBrowser('outputFolder')" aria-label="Close output folder browser">×</button>
-              </div>
-              <div id="outputBrowseCurrentPath" class="browse-current-path"></div>
-              <div id="outputBrowseFolderList" class="browse-folder-list"></div>
-              <button type="button" id="outputUseFolderButton" class="primary">Use this folder</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="settings-section">
-
-          <div class="setting-grid settings-card-grid">
-            <label class="settings-card">DPI<input id="dpi" type="number" value="300" min="72" max="400"></label>
-            <label class="settings-card">OCR device
-              <select id="ocrDevice">
-                <option value="auto">Auto</option>
-                <option value="gpu">GPU</option>
-                <option value="cpu">CPU</option>
-              </select>
-            </label>
-            <label class="settings-card settings-card-wide settings-scan-mode-card">Scan mode
-              <select id="scanMode">
-                <option value="batch">Batch scanning</option>
-                <option value="mass">Mass scanning</option>
-              </select>
-            </label>
-
-          <label class="settings-card settings-card-wide in-place-setting">
-            <span>In-Place</span>
-            <span class="check"><input id="inPlace" type="checkbox"> Keep each PDF in its original folder with its original filename and write SDAT/XMP metadata directly to it.</span>
-          </label>
-          </div>
-        </div>
-
-        <div class="settings-section">
-
-          <div class="settings-card-grid single-column">
-            <label class="settings-card">Config file<input id="configPath" type="text" placeholder="Optional config.json"></label>
-            <label class="settings-card">Project code<input id="projectCode" type="text" placeholder="Leave blank to detect from output folder"></label>
-            <label class="settings-card">County<select id="county"><option value="Allegany">Allegany County</option><option value="Anne Arundel">Anne Arundel County</option><option value="Baltimore">Baltimore County</option><option value="Calvert">Calvert County</option><option value="Caroline">Caroline County</option><option value="Carroll">Carroll County</option><option value="Cecil">Cecil County</option><option value="Charles">Charles County</option><option value="Dorchester">Dorchester County</option><option value="Frederick">Frederick County</option><option value="Garrett">Garrett County</option><option value="Harford">Harford County</option><option value="Howard">Howard County</option><option value="Kent">Kent County</option><option value="Montgomery">Montgomery County</option><option value="Prince George's">Prince George's County</option><option value="Queen Anne's">Queen Anne's County</option><option value="Somerset">Somerset County</option><option value="St. Mary's">St. Mary's County</option><option value="Talbot">Talbot County</option><option value="Washington">Washington County</option><option value="Wicomico">Wicomico County</option><option value="Worcester">Worcester County</option></select></label>
-          </div>
-        </div>
-      </section>
-
-    </aside>
-
-    <section class="viewer-shell">
-      <section class="panel queue-panel bottom-queue-panel">
-        <div class="panel-title-row">
-          <h2>Documents</h2>
-          <span id="queueCount">0</span>
-        </div>
-        <div id="documentList" class="document-list"></div>
-      </section>
-      <div id="emptyState" class="empty-state">
-        <h2>No document selected</h2>
-        <p>Scan a folder, then choose a document from the queue.</p>
+      <div class="header-actions">
+        <button id="scanButton" class="primary">Scan PDFs</button>
+        <button id="fileAllButton">File Batch</button>
       </div>
+    </header>
 
-      <div id="reviewPane" class="review-pane hidden">
-        <section class="pdf-panel">
-          <iframe id="pdfFrame" title="PDF preview"></iframe>
-        </section>
-
-        <section class="editor-panel">
-          <div class="editor-header">
-            <div>
-              <h2 id="documentTitle">Document</h2>
-              <p id="documentStatus">Needs review</p>
-            </div>
-            <button id="fileButton" class="primary">File PDF</button>
-          </div>
-
-          <div class="document-type-card">
-            <div class="document-type-heading">
-              <div>
-                <span class="document-type-eyebrow">Classification</span>
-                <h3>Document Type</h3>
-              </div>
-            </div>
-            <label class="document-type-control" for="editDocumentType">
-              <select id="editDocumentType">
-                <option value="House Location">House Location</option>
-                <option value="Site Plan">Site Plan</option>
-                <option value="Wall Check">Wall Check</option>
-                <option value="Field Notes">Field Notes</option>
-                <option value="Plat/Replat">Plat/Replat</option>
-                <option value="Construction Permit">Construction Permit</option>
-                <option value="Lookup Only">Lookup Only</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="primary-metadata-grid">
-            <label class="primary-metadata-card" for="address">
-              <span>Address</span>
-              <input id="address" type="text">
-            </label>
-            <label class="primary-metadata-card" for="taxId">
-              <span>Tax ID</span>
-              <input id="taxId" type="text">
-            </label>
-          </div>
-
-          <div class="form-grid secondary-metadata-grid">
-            <label>Lot number<input id="lot" type="text"></label>
-            <label>Tax map<input id="taxMap" type="text"></label>
-            <label>Parcel<input id="parcel" type="text"></label>
-            <label>Section<input id="section" type="text"></label>
-            <label>Project code<input id="editProjectCode" type="text"></label>
-          </div>
-
-          <div class="option-row compact-file-options">
-            <label class="check"><input id="copyFile" type="checkbox"> Copy instead of move</label>
-            <label class="check"><input id="saveText" type="checkbox"> Save OCR text</label>
-          </div>
-        </section>
+    <section
+      id="scanProgressPanel"
+      class="scan-progress-panel hidden"
+      aria-live="polite"
+    >
+      <div class="scan-progress-header">
+        <div>
+          <h2>Scan Progress</h2>
+          <p id="scanProgressStatus">Preparing scan...</p>
+        </div>
+        <span id="scanElapsed">0.0 s</span>
       </div>
-
+      <div class="scan-progress-bar"><div id="scanProgressBar"></div></div>
+      <div id="scanProgressMessages" class="scan-progress-messages"></div>
     </section>
-  </main>
 
-  <div id="toast" class="toast hidden"></div>
-  <!--This script tag is what connects this HTML file and the app.js file
+    <main class="layout">
+      <aside class="sidebar">
+        <section class="panel settings-panel">
+          <div class="settings-panel-heading">
+            <h2>Settings</h2>
+          </div>
+
+          <div class="settings-section settings-folder-section">
+            <div
+              class="folder-field-group settings-card settings-card-featured"
+            >
+              <label for="inputFolder"
+                ><span>Input folder</span
+                ><input id="inputFolder" type="text" placeholder="S:"
+              /></label>
+              <button
+                type="button"
+                class="settings-browse-button"
+                onclick="openFolderBrowser('inputFolder')"
+              >
+                Browse input
+              </button>
+              <div id="inputFolderBrowser" class="folder-browser hidden">
+                <div class="folder-browser-header">
+                  <h3>Select Input Folder</h3>
+                  <button
+                    type="button"
+                    class="folder-browser-close"
+                    onclick="closeFolderBrowser('inputFolder')"
+                    aria-label="Close input folder browser"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div
+                  id="inputBrowseCurrentPath"
+                  class="browse-current-path"
+                ></div>
+                <div
+                  id="inputBrowseFolderList"
+                  class="browse-folder-list"
+                ></div>
+                <button type="button" id="inputUseFolderButton" class="primary">
+                  Use this folder
+                </button>
+              </div>
+            </div>
+
+            <div
+              class="folder-field-group settings-card settings-card-featured"
+            >
+              <label for="outputFolder"
+                ><span>Output folder</span
+                ><input id="outputFolder" type="text" placeholder="S:"
+              /></label>
+              <button
+                type="button"
+                class="settings-browse-button"
+                onclick="openFolderBrowser('outputFolder')"
+              >
+                Browse output
+              </button>
+              <div id="outputFolderBrowser" class="folder-browser hidden">
+                <div class="folder-browser-header">
+                  <h3>Select Output Folder</h3>
+                  <button
+                    type="button"
+                    class="folder-browser-close"
+                    onclick="closeFolderBrowser('outputFolder')"
+                    aria-label="Close output folder browser"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div
+                  id="outputBrowseCurrentPath"
+                  class="browse-current-path"
+                ></div>
+                <div
+                  id="outputBrowseFolderList"
+                  class="browse-folder-list"
+                ></div>
+                <button
+                  type="button"
+                  id="outputUseFolderButton"
+                  class="primary"
+                >
+                  Use this folder
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="setting-grid settings-card-grid">
+              <label class="settings-card"
+                >DPI<input
+                  id="dpi"
+                  type="number"
+                  value="300"
+                  min="72"
+                  max="400"
+              /></label>
+              <label class="settings-card"
+                >OCR device
+                <select id="ocrDevice">
+                  <option value="auto">Auto</option>
+                  <option value="gpu">GPU</option>
+                  <option value="cpu">CPU</option>
+                </select>
+              </label>
+              <label
+                class="settings-card settings-card-wide settings-scan-mode-card"
+                >Scan mode
+                <select id="scanMode">
+                  <option value="batch">Batch scanning</option>
+                  <option value="mass">Mass scanning</option>
+                </select>
+              </label>
+
+              <label class="settings-card settings-card-wide in-place-setting">
+                <span>In-Place</span>
+                <span class="check"
+                  ><input id="inPlace" type="checkbox" /> Keep each PDF in its
+                  original folder with its original filename and write SDAT/XMP
+                  metadata directly to it.</span
+                >
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-card-grid single-column">
+              <label class="settings-card"
+                >Config file<input
+                  id="configPath"
+                  type="text"
+                  placeholder="Optional config.json"
+              /></label>
+              <label class="settings-card"
+                >Project code<input
+                  id="projectCode"
+                  type="text"
+                  placeholder="Leave blank to detect from output folder"
+              /></label>
+              <label class="settings-card"
+                >County<select id="county">
+                  <option value="Allegany">Allegany County</option>
+                  <option value="Anne Arundel">Anne Arundel County</option>
+                  <option value="Baltimore">Baltimore County</option>
+                  <option value="Calvert">Calvert County</option>
+                  <option value="Caroline">Caroline County</option>
+                  <option value="Carroll">Carroll County</option>
+                  <option value="Cecil">Cecil County</option>
+                  <option value="Charles">Charles County</option>
+                  <option value="Dorchester">Dorchester County</option>
+                  <option value="Frederick">Frederick County</option>
+                  <option value="Garrett">Garrett County</option>
+                  <option value="Harford">Harford County</option>
+                  <option value="Howard">Howard County</option>
+                  <option value="Kent">Kent County</option>
+                  <option value="Montgomery">Montgomery County</option>
+                  <option value="Prince George's">
+                    Prince George's County
+                  </option>
+                  <option value="Queen Anne's">Queen Anne's County</option>
+                  <option value="Somerset">Somerset County</option>
+                  <option value="St. Mary's">St. Mary's County</option>
+                  <option value="Talbot">Talbot County</option>
+                  <option value="Washington">Washington County</option>
+                  <option value="Wicomico">Wicomico County</option>
+                  <option value="Worcester">Worcester County</option>
+                </select></label
+              >
+            </div>
+          </div>
+        </section>
+      </aside>
+
+      <section class="viewer-shell">
+        <section class="panel queue-panel bottom-queue-panel">
+          <div class="panel-title-row">
+            <h2>Documents</h2>
+            <span id="queueCount">0</span>
+          </div>
+          <div id="documentList" class="document-list"></div>
+        </section>
+        <div id="emptyState" class="empty-state">
+          <h2>No document selected</h2>
+          <p>Scan a folder, then choose a document from the queue.</p>
+        </div>
+
+        <div id="reviewPane" class="review-pane hidden">
+          <section class="pdf-panel">
+            <iframe id="pdfFrame" title="PDF preview"></iframe>
+          </section>
+
+          <section class="editor-panel">
+            <div class="editor-header">
+              <div>
+                <h2 id="documentTitle">Document</h2>
+                <p id="documentStatus">Needs review</p>
+              </div>
+              <button id="fileButton" class="primary">File PDF</button>
+            </div>
+
+            <div class="document-type-card">
+              <div class="document-type-heading">
+                <div>
+                  <span class="document-type-eyebrow">Classification</span>
+                  <h3>Document Type</h3>
+                </div>
+              </div>
+              <label class="document-type-control" for="editDocumentType">
+                <select id="editDocumentType">
+                  <option value="Construction Permit">
+                    Construction Permit
+                  </option>
+                  <option value="Field Notes">Field Notes</option>
+                  <option value="House Location">House Location</option>
+                  <option value="Lookup Only">Lookup Only</option>
+                  <option value="Pier Plan">Pier Plan</option>
+                  <option value="Plat/Replat">Plat/Replat</option>
+                  <option value="Site Plan">Site Plan</option>
+                  <option value="Wall Check">Wall Check</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="primary-metadata-grid">
+              <label class="primary-metadata-card" for="address">
+                <span>Address</span>
+                <input id="address" type="text" />
+              </label>
+              <label class="primary-metadata-card" for="taxId">
+                <span>Tax ID</span>
+                <input id="taxId" type="text" />
+              </label>
+            </div>
+
+            <div class="form-grid secondary-metadata-grid">
+              <label>Lot number<input id="lot" type="text" /></label>
+              <label>Tax map<input id="taxMap" type="text" /></label>
+              <label>Parcel<input id="parcel" type="text" /></label>
+              <label>Section<input id="section" type="text" /></label>
+              <label
+                >Project code<input id="editProjectCode" type="text"
+              /></label>
+            </div>
+
+            <div class="option-row compact-file-options">
+              <label class="check"
+                ><input id="copyFile" type="checkbox" /> Copy instead of
+                move</label
+              >
+              <label class="check"
+                ><input id="saveText" type="checkbox" /> Save OCR text</label
+              >
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <!--This script tag is what connects this HTML file and the app.js file
   which is defined in the static folder in this project directory. 
   When render_template("index.html") reaches this tag it opens and runs
   app.js.
   -->
-  <script src="{{ url_for('static', filename='app.js') }}?v=20260721-6"></script>
-</body>
-
+    <script src="{{ url_for('static', filename='app.js') }}?v=20260721-6"></script>
+  </body>
 </html>

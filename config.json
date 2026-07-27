@@ -77,10 +77,21 @@
       "fieldnotes",
       "notes",
       "field note"
+    ],
+    "Pier Plan": [
+      "pier plan",
+      "pierplan",
+      "pier layout",
+      "pier layout plan",
+      "foundation pier plan",
+      "helical pier plan",
+      "drilled pier plan",
+      "pier detail",
+      "pier details"
     ]
   },
   "document_type_patterns": [
-    "\\s(wall check|site plan|field notes|replat|house location|construction permit)\\s"
+    "\\s(wall check|site plan|field notes|replat|house location|construction permit|pier plan)\\s"
   ],
   "parallel_ocr": false,
   "ocr_workers": 1,
@@ -105,6 +116,13 @@
     "Site Plan": [
       "\\b(?:sewage|drainage|utility|access|ingress|egress|storm\\s*drain|water|sanitary)\\s+easement\\s+plat\\b",
       "\\bsite\\s+plan\\s+.*\\beasement\\s+plat\\b"
+    ],
+    "Pier Plan": [
+      "(?i)pier\\s+plan",
+      "(?i)pier\\s+layout",
+      "(?i)foundation\\s+pier",
+      "(?i)helical\\s+pier",
+      "(?i)drilled\\s+pier"
     ]
   }
 }

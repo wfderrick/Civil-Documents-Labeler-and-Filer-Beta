@@ -63,7 +63,9 @@ def suggested_filename(metadata: dict[str, str], source_name: str) -> str:
     information are pulled from the metadata parameter they are passed into the
     safe_path_part() function imported from pipeline.py to ensure they contain only
     allowed characters and remove extra spaces."""
-    stem = f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}"
+    stem = (
+        f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}"
+    )
     return safe_path_part(stem, Path(source_name).stem) + ".pdf"
 
 
@@ -76,7 +78,8 @@ def document_status(metadata: dict[str, str]) -> str:
     return (
         "needs_review"
         if any(
-            is_unknown(metadata.get(field, "")) for field in REQUIRED_METADATA_FIELDS
+            is_unknown(metadata.get(field, ""))
+            for field in REQUIRED_METADATA_FIELDS
         )
         else "ready"
     )
@@ -109,23 +112,29 @@ def sync_document_metadata(
     return document
 
 
-def find_document(state: dict[str, Any], document_id: str) -> dict[str, Any] | None:
+def find_document(
+    state: dict[str, Any], document_id: str
+) -> dict[str, Any] | None:
     """The find_document() function returns the document in the state parameter
     with id matching the document_id parameter or None if there aren't any
     documents in the state parameter with an id that matches the document_id
     parameter."""
     return next(
-        (doc for doc in state.get("documents", []) if doc.get("id") == document_id),
+        (
+            doc
+            for doc in state.get("documents", [])
+            if doc.get("id") == document_id
+        ),
         None,
     )
 
 
 def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
     """Metadata from dict.
-    
+
     Args:
         metadata: Input used by this operation.
-    
+
     Returns:
         The computed result for the caller. See the function body and type hints for the exact shape.
     """
@@ -238,14 +247,27 @@ def refresh_batch_property_fields_from_sdat(
 def apply_document_update(
     state: dict[str, Any], document: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """Apply edits using the synchronization rules for the active scan mode.
-
-    Batch mode intentionally shares property-level metadata across the batch.
-    Mass mode treats every PDF as a separate job, so edits and SDAT results are
-    restricted to the selected document.
+    """The ``apply_document_update()`` function updates the given document and
+    if batch mode is on the other documents in the current state, and returns
+    the given document. First the metadata for the current document and the
+    scanning mode are extracted. Then the fields from payload are extracted. If
+    mass mode is selected the single document's metadata field is updated via
+    the ``update()`` function with the fields from the payload. Then the folder
+    name, file name , and status are updated via ``sync_document_metadata()``.
+    If any of the changed fields in paylod match tax_map, parcel, tax_id, or
+    address the document is updated using data pulled from the SDAT. If
+    mass_mode just the document given by the parameter is updated via
+    ``refresh_property_fields_from_sdat()``. Otherwise the
+    whole batch of documents is updated by the SDAT via
+    ``refresh_batch_property_fields_from_sdat()``. Then document specific fields
+    are updated. Finally the documents folder name, file name, status are
+    updated once again with the ``sync_document_metadata()`` function and
+    returned.
     """
     metadata = document["metadata"]
-    scan_mode = str(state.get("settings", {}).get("scan_mode", "batch")).lower()
+    scan_mode = str(
+        state.get("settings", {}).get("scan_mode", "batch")
+    ).lower()
     mass_mode = scan_mode == "mass"
 
     property_field_names = (
@@ -258,15 +280,15 @@ def apply_document_update(
         "project_code",
     )
     property_updates = {
-        field: payload[field] for field in property_field_names if field in payload
+        field: payload[field]
+        for field in property_field_names
+        if field in payload
     }
     changed_field = payload.get("changed_field", "")
 
     if property_updates:
         update_targets = (
-            [document]
-            if mass_mode
-            else list(state.get("documents", []))
+            [document] if mass_mode else list(state.get("documents", []))
         )
         for target_document in update_targets:
             target_document["metadata"].update(property_updates)
@@ -274,7 +296,7 @@ def apply_document_update(
                 target_document, auto_folder=True, auto_file_name=True
             )
 
-    if changed_field in {"tax_map", "parcel", "tax_id", "address", "section"}:
+    if changed_field in {"tax_map", "parcel", "tax_id", "address"}:
         if mass_mode:
             refresh_property_fields_from_sdat(state, [document], changed_field)
         else:
@@ -298,7 +320,9 @@ def apply_document_update(
         )
 
     if payload.get("auto_file_name"):
-        document["file_name"] = suggested_filename(metadata, document["source_name"])
+        document["file_name"] = suggested_filename(
+            metadata, document["source_name"]
+        )
     elif "file_name" in payload:
         stem = Path(payload["file_name"]).stem
         document["file_name"] = (
@@ -319,15 +343,40 @@ def file_document_to_output(
 ) -> dict[str, Any]:
     """The file_document_to_output() function places the given document in the
     given output_folder, writes standard and XMP metadata,
-    adds a text layer onto the pdf, and updates the document parameter and 
+    adds a text layer onto the pdf, and updates the document parameter and
     returns it. The function begins by checking that the source PDF still
     exists by checking that the source_path key in the document parameter is a
     valid path. Then the function diverges into in-place saving and saving to
     the given output.
 
-    In-place:  Build the updated PDF beside the source, then atomically replace
+    In-place: Build the updated PDF beside the source, then atomically replace
     the original. A metadata-writing failure therefore leaves the source file
-    untouched instead of partially rewriting it.
+    untouched instead of partially rewriting it. A file with a unique name is
+    generated via the ``mkstemp()`` function. It is then promptly closed to
+    allow for editing of the document. All of the data from the original file is
+    copied into the temp file via the ``copy2`` function. The temp_file has the
+    text layer, windows metadata, and XMP metadata written onto it via
+    ``write_pdf_metadata()``. Then the newly updated temp file overwrites the
+    information in the original file. The temp file is removed via ``unlink()``
+    which leaves only the original file which has now been replaced with the
+    updated data. If the ``save_text`` parameter is true save the ocred text
+    from the document to a txt file. Updates the filed_path and status fields in
+    the current document. Finally it returns.
+
+    Output Folder: First the resolved folder is selected as either the
+    folder_name parameter, the folder_name field in the given document, or the
+    default unknown folder name. This is passed into ``safe_path_part()``. Next,
+    the file name is determined. The rsolved folder is combined with the ouput
+    folder parameter to create the path to the desired location for the files to
+    be placed. If the directory doesn't exist then one is created. The
+    destination path is created by combining the destiniation folder and the
+    file name and combining them into a path which is then checked for
+    uniqueness and corrected via ``unique_path``. If the copy_file parameter is
+    true the document is copied from the source to the destination path,
+    otherwise it is moved. The metadata for the document is updated with
+    ``write_pdf_metadata()``. If save_text the ocred text is saved. The document
+    parameter is updated with it's new folder name, file name, filed path, and
+    status and the document is returned.
     """
     source_path = Path(document["source_path"])
     if not source_path.exists():
@@ -353,19 +402,18 @@ def file_document_to_output(
                 document.get("ocr_text", ""), encoding="utf-8"
             )
 
-        document.update(
-            {
-                "filed_path": str(source_path),
-                "status": "filed",
-            }
-        )
+        document["filed_path"] = str(source_path)
+        document["status"] = "filed"
+
         return document
 
     resolved_folder = safe_path_part(
         folder_name or document.get("folder_name", ""),
         "Unknown Lot - Unknown Address",
     )
-    file_stem = Path(file_name or document.get("file_name", source_path.name)).stem
+    file_stem = Path(
+        file_name or document.get("file_name", source_path.name)
+    ).stem
     resolved_file_name = safe_path_part(file_stem, source_path.stem) + ".pdf"
 
     destination_folder = output_folder / resolved_folder
