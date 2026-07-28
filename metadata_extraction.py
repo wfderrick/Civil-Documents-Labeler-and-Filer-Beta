@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from difflib import SequenceMatcher
@@ -200,6 +201,8 @@ class FuzzyMatch:
 
 Config = dict[str, Any]
 
+_CONFIG_CACHE: dict[tuple[str, int, int], Config] = {}
+
 
 def load_config(path: Path | None) -> Config:
     """The load_config() function returns a dictionary with settings and regex
@@ -213,7 +216,15 @@ def load_config(path: Path | None) -> Config:
     config = dict(DEFAULT_CONFIG)
     if path is None:
         return config
-    with path.open("r", encoding="utf-8") as config_file:
+
+    resolved = path.resolve()
+    stat = resolved.stat()
+    cache_key = (str(resolved), stat.st_mtime_ns, stat.st_size)
+    cached = _CONFIG_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
+
+    with resolved.open("r", encoding="utf-8") as config_file:
         user_config = json.load(config_file)
     config.update(
         {
@@ -222,6 +233,8 @@ def load_config(path: Path | None) -> Config:
             if value not in (None, "", [])
         }
     )
+    _CONFIG_CACHE.clear()
+    _CONFIG_CACHE[cache_key] = dict(config)
     return config
 
 
@@ -459,8 +472,35 @@ def fuzzy_document_type(
         The strongest accepted match, or ``None`` when no candidate is reliable.
     """
     normalized_text = normalize_for_fuzzy(text)
+    groups = keyword_groups(keywords)
+
+    # Fast path: preserve the legacy winner exactly when a configured keyword
+    # occurs verbatim after OCR normalization. The legacy loop uses a strict
+    # ``>`` comparison, so the first exact match (score 1.0) can never be
+    # displaced by a later candidate. Returning it immediately avoids running
+    # thousands of SequenceMatcher comparisons for every nonmatching keyword.
+    for label, candidates in groups.items():
+        for keyword in candidates:
+            normalized_keyword = normalize_for_fuzzy(keyword)
+            if not normalized_keyword:
+                continue
+            start = normalized_text.find(normalized_keyword)
+            if start >= 0:
+                end = start + len(normalized_keyword)
+                return FuzzyMatch(
+                    label=label,
+                    score=1.0,
+                    start=start,
+                    end=end,
+                    matched_text=text[start:end],
+                    keyword=keyword,
+                )
+
+    # Compatibility fallback: when OCR contains no exact configured phrase,
+    # retain the existing exhaustive fuzzy algorithm and tie behavior. This
+    # keeps typo-tolerance unchanged while making ordinary scans much faster.
     best: FuzzyMatch | None = None
-    for label, candidates in keyword_groups(keywords).items():
+    for label, candidates in groups.items():
         for keyword in candidates:
             score, start, end = best_keyword_window(
                 normalize_for_fuzzy(keyword), normalized_text
@@ -477,6 +517,8 @@ def fuzzy_document_type(
             )
             if best is None or match.score > best.score:
                 best = match
+                if best.score >= 1.0:
+                    return best
     return best if best and best.score >= threshold else None
 
 
@@ -711,43 +753,59 @@ def extract_metadata(
     default_project_code: str,
     default_document_type: str,
     ocr_pages: Iterable[Mapping[str, Any]] | None = None,
+    *,
+    performance_callback: Any | None = None,
+    profile_label: str = "document",
 ) -> ExtractedMetadata:
-    """Extract metadata.
-
-    Args:
-        text: Input used by this operation.
-        config: Input used by this operation.
-        default_project_code: Input used by this operation.
-        default_document_type: Input used by this operation.
-        ocr_pages: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Extract metadata and optionally emit detailed per-stage performance timings."""
     from sdat import (
         LOOKUP_DOCUMENT_TYPE,
         extract_sdat_lookup_tax_id,
         is_sdat_lookup_document,
     )
 
-    if is_sdat_lookup_document(text):
+    emit = performance_callback or (lambda _message: None)
+    profile_started = time.perf_counter()
+    stage_rows: list[tuple[str, float]] = []
+
+    def stage(label: str, started: float) -> float:
+        elapsed = time.perf_counter() - started
+        stage_rows.append((label, elapsed))
+        emit(f"[META-PERF] {profile_label}.{label}: {elapsed:.4f}s")
+        return elapsed
+
+    started = time.perf_counter()
+    lookup_document = is_sdat_lookup_document(text)
+    stage("lookup_document_detection", started)
+    if lookup_document:
+        started = time.perf_counter()
         lookup = extract_sdat_lookup_tax_id(text)
+        stage("lookup_tax_id_extraction", started)
         tax_id = lookup[2] if lookup else ""
-        return ExtractedMetadata(
+        result = ExtractedMetadata(
             lot="Unknown Lot",
             address="Unknown Address",
             project_code=safe_path_part(default_project_code, "Project"),
             document_type=LOOKUP_DOCUMENT_TYPE,
             tax_id=tax_id,
         )
+        total = time.perf_counter() - profile_started
+        emit(f"[META-PERF] {profile_label}.total: {total:.4f}s | chars={len(text)}; type={result.document_type}")
+        return result
 
-    doc_match = regex_document_type(
-        text, config.get("document_type_regex_rules")
-    )
+    started = time.perf_counter()
+    doc_match = regex_document_type(text, config.get("document_type_regex_rules"))
+    stage("document_type_regex", started)
+
     if doc_match is None:
-        doc_match = fuzzy_document_type(
-            text, config.get("document_type_keywords")
-        )
+        started = time.perf_counter()
+        doc_match = fuzzy_document_type(text, config.get("document_type_keywords"))
+        stage("document_type_fuzzy", started)
+    else:
+        stage_rows.append(("document_type_fuzzy", 0.0))
+        emit(f"[META-PERF] {profile_label}.document_type_fuzzy: 0.0000s | skipped=regex_match")
+
+    started = time.perf_counter()
     document_type = (
         doc_match.label
         if doc_match
@@ -755,48 +813,54 @@ def extract_metadata(
         or default_document_type
         or "Field Notes"
     )
-    # Preserve the original lot technique: search only after the detected document type.
+    stage("document_type_fallback", started)
+
+    started = time.perf_counter()
     lot_search_text = text[doc_match.start :] if doc_match else text
-    lot = (
-        first_match(lot_search_text, config.get("lot_pattern", []))
-        or "Unknown Lot"
-    )
-    tax_map = (
-        first_match(
-            text, config.get("map_patterns", []), normalize_numbers=False
-        )
-        or ""
-    )
-    parcel = (
-        first_match(
-            text, config.get("parcel_patterns", []), normalize_numbers=True
-        )
-        or ""
-    )
-    tax_id = (
-        first_match(
-            text, config.get("tax_id_patterns", []), normalize_numbers=True
-        )
-        or ""
-    )
-    return ExtractedMetadata(
+    lot = first_match(lot_search_text, config.get("lot_pattern", [])) or "Unknown Lot"
+    stage("lot_extraction", started)
+
+    started = time.perf_counter()
+    tax_map = first_match(text, config.get("map_patterns", []), normalize_numbers=False) or ""
+    stage("tax_map_extraction", started)
+
+    started = time.perf_counter()
+    parcel = first_match(text, config.get("parcel_patterns", []), normalize_numbers=True) or ""
+    stage("parcel_extraction", started)
+
+    started = time.perf_counter()
+    tax_id = first_match(text, config.get("tax_id_patterns", []), normalize_numbers=True) or ""
+    stage("tax_id_extraction", started)
+
+    started = time.perf_counter()
+    address = first_valid_address(text, config, ocr_pages) or "Unknown Address"
+    stage("address_extraction", started)
+
+    started = time.perf_counter()
+    project_code = first_match(text, config.get("project_code_patterns", [])) or default_project_code
+    stage("project_code_extraction", started)
+
+    started = time.perf_counter()
+    result = ExtractedMetadata(
         lot=safe_path_part(lot, "Unknown Lot"),
-        address=safe_path_part(
-            first_valid_address(text, config, ocr_pages) or "Unknown Address",
-            "Unknown Address",
-        ),
-        project_code=safe_path_part(
-            first_match(text, config.get("project_code_patterns", []))
-            or default_project_code,
-            "Project",
-        ),
-        # Keep the UI classification label intact. Filename creation sanitizes
-        # path-invalid characters separately in document_service.suggested_filename().
+        address=safe_path_part(address, "Unknown Address"),
+        project_code=safe_path_part(project_code, "Project"),
         document_type=normalize_value(document_type) or "Field Notes",
         tax_map=safe_path_part(tax_map, "") if tax_map else "",
         parcel=safe_path_part(parcel, "") if parcel else "",
         tax_id=safe_path_part(tax_id, "") if tax_id else "",
     )
+    stage("result_sanitization", started)
+
+    total = time.perf_counter() - profile_started
+    emit(f"[META-PERF] {profile_label}.total: {total:.4f}s | chars={len(text)}; type={result.document_type}")
+    ranked = sorted(stage_rows, key=lambda row: row[1], reverse=True)
+    emit(f"=== METADATA EXTRACTION HOTSPOTS {profile_label} START ===")
+    for rank, (label, seconds) in enumerate(ranked, start=1):
+        percent = (seconds / total * 100.0) if total else 0.0
+        emit(f"rank={rank}; stage={label}; seconds={seconds:.4f}; percent={percent:.1f}")
+    emit(f"=== METADATA EXTRACTION HOTSPOTS {profile_label} END ===")
+    return result
 
 
 def prefer_known(value: str, fallback: str) -> str:

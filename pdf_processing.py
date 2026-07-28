@@ -182,7 +182,9 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
 
 
 def write_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
-    """The ``write_pdf_metadata()`` function"""
+    """The ``write_pdf_metadata()`` function updates the windows metadata and
+    adds custom XML metadata to the file located at the pdf_path parameter using
+    the document parameter as the source of the metadata."""
 
     try:
         write_standard_pdf_metadata(pdf_path, document)

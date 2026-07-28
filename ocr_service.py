@@ -252,7 +252,8 @@ def ocr_pdf_with_layout(
     ocr_pages: list[dict[str, Any]] = []
 
     with tempfile.TemporaryDirectory(prefix="paddleocr_pdf_") as temp_dir:
-        rendered_pages = render_pdf_pages_with_info(pdf_path, Path(temp_dir), dpi)
+        with time_block(f"{pdf_path.name}: rendered pages", progress_callback):
+            rendered_pages = render_pdf_pages_with_info(pdf_path, Path(temp_dir), dpi)
         total = len(rendered_pages)
         num = 1
         for page_info in rendered_pages:
@@ -261,7 +262,14 @@ def ocr_pdf_with_layout(
             ):
                 result = ocr.predict(str(page_info["image_path"]))
             num += 1
+            extract_started = time.perf_counter()
             items = extract_ocr_items(result)
+            extract_elapsed = time.perf_counter() - extract_started
+            if progress_callback:
+                progress_callback(
+                    f"{pdf_path.name}: normalized OCR page {num - 1} of {total} "
+                    f"in {extract_elapsed:.2f} seconds."
+                )
             lines.extend(item["text"] for item in items if item.get("text"))
             ocr_pages.append(
                 {

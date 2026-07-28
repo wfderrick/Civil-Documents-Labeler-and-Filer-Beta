@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -30,6 +31,7 @@ from scan_status import (
     finish_scan_progress,
     reset_scan_progress,
     scan_progress_snapshot,
+    set_scan_timing,
 )
 from state_store import (
     append_document,
@@ -170,6 +172,7 @@ def scan_batch(
     report = progress_callback or (lambda _message: None)
     report(f"Found {len(pdfs)} PDF{'s' if len(pdfs) != 1 else ''} to scan.")
     report("Beginning OCR processing.")
+    ocr_started = time.perf_counter()
     scanned = ocr_pdf_batch(
         pdfs,
         dpi=settings["dpi"],
@@ -181,16 +184,31 @@ def scan_batch(
         gpu_device_id=gpu_device_id,
         progress_callback=report,
     )
-    report("Finished OCR processing.")
+    ocr_elapsed = time.perf_counter() - ocr_started
+    set_scan_timing("ocr_total", ocr_elapsed)
+    report(f"Finished OCR processing in {ocr_elapsed:.2f} seconds.")
     report("Beginning metadata voting and SDAT enrichment.")
+    metadata_started = time.perf_counter()
+    def performance_output(message: str) -> None:
+        # Print every profiler line to the terminal for easy copy/paste, while
+        # also showing it in the application's progress feed.
+        print(message, flush=True)
+        report(message)
+
     shared_metadata, metadata_votes = choose_batch_metadata_by_vote(
         scanned_documents=scanned,
         config=config,
         default_project_code=settings["project_code"],
         default_document_type=settings["document_type"],
+        performance_callback=performance_output,
     )
-    report("Finished metadata voting and SDAT enrichment.")
+    metadata_elapsed = time.perf_counter() - metadata_started
+    set_scan_timing("metadata_and_sdat", metadata_elapsed)
+    report(
+        f"Finished metadata voting and SDAT enrichment in {metadata_elapsed:.2f} seconds."
+    )
     documents: list[dict[str, Any]] = []
+    review_started = time.perf_counter()
     report("Preparing documents for review.")
     for scanned_document, metadata_vote in zip(scanned, metadata_votes):
         is_lookup = metadata_vote.document_type == LOOKUP_DOCUMENT_TYPE
@@ -207,20 +225,17 @@ def scan_batch(
             )
         )
         documents.append(
-            sync_document_metadata(
-                {
-                    "id": uuid.uuid4().hex,
-                    "source_path": scanned_document["source_path"],
-                    "source_name": scanned_document["source_name"],
-                    "ocr_text": scanned_document["ocr_text"],
-                    "ocr_pages": scanned_document.get("ocr_pages", []),
-                    "metadata": asdict(final_metadata),
-                    "is_lookup_document": is_lookup,
-                    "filed_path": "",
-                }
-            )
+            {
+                "id": uuid.uuid4().hex,
+                "source_path": scanned_document["source_path"],
+                "source_name": scanned_document["source_name"],
+                "ocr_text": scanned_document["ocr_text"],
+                "ocr_pages": scanned_document.get("ocr_pages", []),
+                "metadata": asdict(final_metadata),
+                "is_lookup_document": is_lookup,
+                "filed_path": "",
+            }
         )
-    report("Finished preparing documents for review.")
     normal_documents = [
         document
         for document in documents
@@ -233,8 +248,15 @@ def scan_batch(
             document["file_name"] = suggested_filename(
                 document["metadata"], document["source_name"]
             )
-            sync_document_metadata(document)
 
+    # Synchronize each record once, after shared names and folders are assigned.
+    # Older versions synchronized normal documents twice during every batch.
+    for document in documents:
+        sync_document_metadata(document)
+
+    review_elapsed = time.perf_counter() - review_started
+    set_scan_timing("review_record_preparation", review_elapsed)
+    report(f"Finished preparing documents for review in {review_elapsed:.2f} seconds.")
     return documents
 
 
@@ -507,6 +529,7 @@ def api_scan():
     # output folder, resetting the scan progress window and starting a new scan
     # progress window.
     reset_scan_progress()
+    scan_started = time.perf_counter()
     add_scan_progress("Starting scan request.")
     settings = scan_settings(json_payload())
     input_folder = Path(settings["input_folder"])
@@ -552,9 +575,11 @@ def api_scan():
     )
 
     # If there is a config file it is loaded into a python dictionary.
+    config_started = time.perf_counter()
     config = load_config(
         config_path if config_path and config_path.exists() else None
     )
+    set_scan_timing("config_load", time.perf_counter() - config_started)
 
     # Gets the project code and section from the output folder name. Then updates
     # the section in settins to match the detected section.
@@ -595,6 +620,7 @@ def api_scan():
         or not settings.get("parallel_ocr", False)
         or int(settings.get("ocr_workers", 1)) <= 1
     )
+    engine_started = time.perf_counter()
     ocr = (
         get_cached_ocr(
             lang=settings["lang"],
@@ -605,6 +631,9 @@ def api_scan():
         if use_main_process_engine
         else None
     )
+    engine_elapsed = time.perf_counter() - engine_started
+    set_scan_timing("ocr_engine_ready", engine_elapsed)
+    add_scan_progress(f"OCR engine ready in {engine_elapsed:.2f} seconds.")
 
     state = {"settings": settings, "documents": []}
     if scan_mode == "mass":
@@ -633,6 +662,9 @@ def api_scan():
                 document["metadata"]["section"] = settings["section"]
         replace_state(settings=settings, documents=state["documents"])
     final_state = read_state() if scan_mode == "mass" else state
+    total_elapsed = time.perf_counter() - scan_started
+    set_scan_timing("scan_total", total_elapsed)
+    add_scan_progress(f"Performance summary: total scan time {total_elapsed:.2f} seconds.")
     finish_scan_progress(
         message=f"Scan complete. {len(final_state['documents'])} document(s)\
           ready for review."

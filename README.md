@@ -1,6 +1,10 @@
-# OCR Batch Filing Pipeline
+# COABarrett File Identifier and Sorter — Version 3.0
 
 This version is optimized for one related batch of PDFs, such as Site Plan, House Location, Wall Check, and Field Notes.
+
+## Version 3.0 performance update
+
+Document classification now checks normalized exact keywords before using exhaustive fuzzy matching. Exact matches preserve the prior configuration-order winner and bypass thousands of unnecessary `SequenceMatcher` comparisons. The original fuzzy path remains available for OCR typos. See `PERFORMANCE_CHANGES_V3.0.md`.
 
 ## Key behavior
 

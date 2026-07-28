@@ -109,3 +109,24 @@ def test_normalize_ocr_numbers():
         changed_text.append(normalize_ocr_numbers(text))
 
     assert changed_text == ["100", "108", "155", "11188"]
+
+def test_fuzzy_document_type_exact_fast_path_preserves_first_configured_winner():
+    from metadata_extraction import fuzzy_document_type
+
+    keywords = {
+        "First": ["site plan"],
+        "Second": ["site plan"],
+    }
+    match = fuzzy_document_type("TITLE: SITE PLAN", keywords)
+    assert match is not None
+    assert match.label == "First"
+    assert match.score == 1.0
+
+
+def test_fuzzy_document_type_still_accepts_ocr_typo():
+    from metadata_extraction import fuzzy_document_type
+
+    match = fuzzy_document_type("TITLE: WALL CHEGK", {"Wall Check": ["wall check"]})
+    assert match is not None
+    assert match.label == "Wall Check"
+    assert match.score >= 0.75

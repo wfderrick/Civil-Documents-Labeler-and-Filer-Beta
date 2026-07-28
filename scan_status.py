@@ -34,6 +34,7 @@ def reset_scan_progress() -> None:
                 "failed": False,
                 "started_at": time.perf_counter(),
                 "messages": [],
+                "timings": {},
             }
         )
 
@@ -55,6 +56,26 @@ def add_scan_progress(message: str) -> None:
                 "elapsed": round(elapsed, 2),
             }
         )
+
+
+
+def set_scan_timing(name: str, elapsed: float) -> None:
+    """Record one named scan-stage duration for diagnostics and regression checks."""
+    key = str(name or "").strip()
+    if not key:
+        return
+    with _SCAN_PROGRESS_LOCK:
+        _SCAN_PROGRESS.setdefault("timings", {})[key] = round(max(0.0, float(elapsed)), 3)
+
+
+def add_scan_timing(name: str, elapsed: float) -> None:
+    """Accumulate a duration into a named scan stage."""
+    key = str(name or "").strip()
+    if not key:
+        return
+    with _SCAN_PROGRESS_LOCK:
+        timings = _SCAN_PROGRESS.setdefault("timings", {})
+        timings[key] = round(float(timings.get(key, 0.0)) + max(0.0, float(elapsed)), 3)
 
 
 def finish_scan_progress(*, failed: bool = False, message: str = "") -> None:
@@ -80,4 +101,5 @@ def scan_progress_snapshot() -> dict[str, Any]:
             "failed": bool(_SCAN_PROGRESS.get("failed")),
             "elapsed": round(elapsed, 3),
             "messages": list(_SCAN_PROGRESS.get("messages", [])),
+            "timings": dict(_SCAN_PROGRESS.get("timings", {})),
         }

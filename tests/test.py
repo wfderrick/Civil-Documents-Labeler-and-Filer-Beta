@@ -6,26 +6,26 @@ response = requests.get(
     OPENDATAMD_API_URL,
     params={
         "$limit": 1,
-        "$where": "upper(mdp_street_address_mdp_field_address) = '1016 UPPER PINDELL RD'"
-    }
+        "$where": "upper(mdp_street_address_mdp_field_address) = '100 JIBSAIL DR'",
+    },
 )
 
 prop_dict = response.json()
 for key in prop_dict[0].keys():  # noqa: SIM118
     print(f"Field:{key},     Value:{prop_dict[0].get(key)}")"""
 
-"""import pikepdf
+import pikepdf
 
-pdf = pikepdf.Pdf.open("tests\\Site Plan - Lot 102.pdf")
+pdf = pikepdf.Pdf.open("tests\\Site Plan - Lot 104.pdf")
 
 with pdf.open_metadata() as meta:
     for key, value in meta.items():
         print(key, value)
-"""
 
-from pathlib import Path
+
+"""from pathlib import Path
 
 source_path = Path("").cwd()
 source_path = Path(f"{source_path}.pdf")
 print(Path(source_path.stem))
-print(source_path.name)
+print(source_path.name)"""

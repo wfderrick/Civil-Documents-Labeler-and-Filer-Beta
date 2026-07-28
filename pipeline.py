@@ -5,6 +5,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from typing import Any
+import time
 
 from metadata_extraction import (
     Config,
@@ -169,31 +170,59 @@ def choose_batch_metadata_by_vote(
     default_document_type: str,
     resolve_duplicate_document_types: bool = True,
     strict_independent_lookup: bool = False,
+    performance_callback=None,
 ) -> tuple[dict[str, str], list[ExtractedMetadata]]:
-    """Choose batch metadata by vote.
-    
-    Args:
-        scanned_documents: Input used by this operation.
-        config: Input used by this operation.
-        default_project_code: Input used by this operation.
-        default_document_type: Input used by this operation.
-        resolve_duplicate_document_types: Input used by this operation.
-        strict_independent_lookup: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
+    """Choose shared metadata while reporting detailed performance timings.
+
+    ``performance_callback`` receives concise terminal-safe lines. It is optional
+    so existing callers and tests remain compatible.
     """
-    votes = extract_document_metadata_votes(
-        scanned_documents, config, default_project_code, default_document_type
-    )
+    emit = performance_callback or (lambda _message: None)
+    stage_rows: list[tuple[str, float, str]] = []
+    total_started = time.perf_counter()
+
+    def timed(label: str, started: float, detail: str = "") -> float:
+        elapsed = time.perf_counter() - started
+        stage_rows.append((label, elapsed, detail))
+        emit(f"[PERF] {label}: {elapsed:.4f}s" + (f" | {detail}" if detail else ""))
+        return elapsed
+
+    extraction_started = time.perf_counter()
+    votes: list[ExtractedMetadata] = []
+    for index, document in enumerate(scanned_documents, start=1):
+        item_started = time.perf_counter()
+        vote = extract_metadata(
+            document.get("ocr_text", ""),
+            config,
+            default_project_code,
+            default_document_type,
+            document.get("ocr_pages", []),
+            performance_callback=emit,
+            profile_label=f"document_{index}",
+        )
+        votes.append(vote)
+        elapsed = time.perf_counter() - item_started
+        emit(
+            f"[PERF] metadata.extract.document_{index}: {elapsed:.4f}s | "
+            f"chars={len(document.get('ocr_text', ''))}; type={vote.document_type}"
+        )
+    timed("metadata.extract.all_documents", extraction_started, f"documents={len(votes)}")
+
+    partition_started = time.perf_counter()
     lookup_indexes = [
         i for i, vote in enumerate(votes) if vote.document_type == LOOKUP_DOCUMENT_TYPE
     ]
     lookup_index_set = set(lookup_indexes)
     normal_indexes = [i for i in range(len(votes)) if i not in lookup_index_set]
-
     normal_votes = [votes[i] for i in normal_indexes]
     normal_docs = [scanned_documents[i] for i in normal_indexes]
+    timed(
+        "metadata.partition_lookup_documents",
+        partition_started,
+        f"normal={len(normal_votes)}; lookup={len(lookup_indexes)}",
+    )
+
+    visual_started = time.perf_counter()
     if normal_votes and resolve_duplicate_document_types:
         fixed = fix_duplicate_document_types_with_visual_classifier(
             normal_votes, normal_docs, config
@@ -201,7 +230,9 @@ def choose_batch_metadata_by_vote(
         for index, vote in zip(normal_indexes, fixed):
             votes[index] = vote
         normal_votes = fixed
+    timed("metadata.visual_duplicate_resolution", visual_started)
 
+    voting_started = time.perf_counter()
     lookup_tax_ids = [
         votes[i].tax_id for i in lookup_indexes if is_known_value(votes[i].tax_id)
     ]
@@ -219,10 +250,14 @@ def choose_batch_metadata_by_vote(
         ),
         "section": vote_for_value((vote.section for vote in normal_votes), ""),
     }
+    timed("metadata.vote_shared_fields", voting_started)
 
     if not config.get("sdat_lookup", True):
+        timed("metadata_and_sdat.total", total_started, "SDAT disabled")
+        _emit_performance_summary(emit, stage_rows)
         return shared, votes
 
+    seed_started = time.perf_counter()
     seed_source = (
         normal_votes[0]
         if normal_votes
@@ -235,36 +270,57 @@ def choose_batch_metadata_by_vote(
     )
     seed = replace(seed_source, **shared)
     county = str(config.get("default_county", "") or "")
+    timed("sdat.prepare_seed", seed_started, f"county={county or 'none'}")
 
-    # Priority 1: explicit Tax ID (lookup record first, then labelled OCR Tax ID).
-    # Never trust a regex match until SDAT confirms it.
+    # Priority 1: explicit Tax ID.
     if is_known_value(shared["tax_id"]):
+        lookup_started = time.perf_counter()
         records = _lookup_by_tax_id(shared["tax_id"], county)
+        timed(
+            "sdat.lookup_by_tax_id",
+            lookup_started,
+            f"records={len(records)}; tax_id={shared['tax_id']}",
+        )
         if records:
+            apply_started = time.perf_counter()
             _apply_sdat_record_to_shared(shared, seed, records[0])
+            timed("sdat.apply_tax_id_record", apply_started)
+            timed("metadata_and_sdat.total", total_started, "resolved_by=tax_id")
+            _emit_performance_summary(emit, stage_rows)
             return shared, votes
-        # Reject an unconfirmed OCR Tax ID so it cannot block the correct address.
         shared["tax_id"] = ""
         seed = replace(seed, tax_id="")
 
-    # Priority 2: address. This is one targeted API request and avoids rescanning
-    # or joining the full batch OCR text.
+    # Priority 2: address.
     if is_known_value(shared["address"]):
+        lookup_started = time.perf_counter()
         records = lookup_maryland_property_by_address(
             shared["address"], county=county, limit=25
         )
+        timed(
+            "sdat.lookup_by_address",
+            lookup_started,
+            f"records={len(records)}; address={shared['address']}",
+        )
         if records:
+            select_started = time.perf_counter()
             selected_record = (
                 _confident_unique_address_record(shared["address"], records)
                 if strict_independent_lookup
                 else records[0]
             )
+            timed("sdat.select_address_record", select_started)
             if selected_record is not None:
+                apply_started = time.perf_counter()
                 _apply_sdat_record_to_shared(shared, seed, selected_record)
+                timed("sdat.apply_address_record", apply_started)
+                timed("metadata_and_sdat.total", total_started, "resolved_by=address")
+                _emit_performance_summary(emit, stage_rows)
                 return shared, votes
 
-    # Priority 3: map/parcel fallback only when stronger identifiers failed.
+    # Priority 3: map/parcel fallback.
     if (shared["tax_map"] or shared["parcel"]) and not strict_independent_lookup:
+        terms_started = time.perf_counter()
         terms = SdatSearchTerms(
             county=county,
             lot=(
@@ -275,11 +331,39 @@ def choose_batch_metadata_by_vote(
             tax_map=shared["tax_map"],
             parcel=shared["parcel"],
         )
+        timed("sdat.prepare_map_parcel_terms", terms_started)
+        lookup_started = time.perf_counter()
         records = lookup_maryland_property_records(terms)
+        timed(
+            "sdat.lookup_by_map_parcel",
+            lookup_started,
+            f"records={len(records)}; map={shared['tax_map']}; parcel={shared['parcel']}",
+        )
         if records:
+            apply_started = time.perf_counter()
             _apply_sdat_record_to_shared(shared, seed, records[0])
+            timed("sdat.apply_map_parcel_record", apply_started)
 
+    timed("metadata_and_sdat.total", total_started, "resolved_by=none_or_map_parcel")
+    _emit_performance_summary(emit, stage_rows)
     return shared, votes
+
+
+def _emit_performance_summary(emit, rows: list[tuple[str, float, str]]) -> None:
+    """Emit a copy/paste-friendly performance block sorted by elapsed time."""
+    total = next((seconds for label, seconds, _ in reversed(rows) if label == "metadata_and_sdat.total"), 0.0)
+    emit("=== COAB PERFORMANCE REPORT START ===")
+    emit(f"report_version=3.0; metadata_sdat_total_seconds={total:.4f}")
+    for rank, (label, seconds, detail) in enumerate(
+        sorted(rows, key=lambda row: row[1], reverse=True), start=1
+    ):
+        percent = (seconds / total * 100.0) if total else 0.0
+        suffix = f"; detail={detail}" if detail else ""
+        emit(
+            f"rank={rank}; stage={label}; seconds={seconds:.4f}; "
+            f"percent_of_total={percent:.1f}{suffix}"
+        )
+    emit("=== COAB PERFORMANCE REPORT END ===")
 
 
 def merge_batch_metadata(
