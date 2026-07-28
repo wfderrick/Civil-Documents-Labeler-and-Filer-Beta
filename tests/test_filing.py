@@ -12,6 +12,8 @@ import pikepdf
 import document_service
 from document_service import file_document_to_output
 
+TEST_DIR = Path(__file__).resolve().parent
+
 
 def test_in_place_filing_preserves_path_and_name(tmp_path, monkeypatch):
     """Protect the defining safety promise of In-Place mode.
@@ -120,9 +122,8 @@ def test_updated_xml_metadata(tmp_path, monkeypatch):
 
     After copying a real fixture PDF, the test reopens it with pikepdf and checks that the
     reviewed address is present alongside the expected destination and OCR text file."""
-    source = Path(
-        "C:\\Users\\wderrick\\Documents\\GitHub\\COABarrett File Identifier and Sorter - Version 2.4\\tests\\Site Plan - Lot 104.pdf"
-    )
+    source = TEST_DIR / "\\Site Plan - Lot 104.pdf"
+    
     document = {
         "source_path": str(source),
         "source_name": source.name,
