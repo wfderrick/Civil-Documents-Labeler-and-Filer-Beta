@@ -100,19 +100,19 @@ def test_regular_filing_saves_ocr_text_and_copies(tmp_path, monkeypatch):
     )
     assert (
         source.exists()
-        and (tmp_path / "Selected Folder\\Selected File.pdf").exists()
+        and (tmp_path / "Selected Folder"/"Selected File.pdf").exists()
     )
     assert source.name == "Original Name.pdf"
     assert (
         source.read_bytes() == b"original-pdf"
-        and (tmp_path / "Selected Folder\\Selected File.pdf").read_bytes()
+        and (tmp_path / "Selected Folder"/"Selected File.pdf").read_bytes()
         == b"original-pdf-with-metadata"
     )
     assert filed["filed_path"] == str(
-        tmp_path / "Selected Folder\\Selected File.pdf"
+        tmp_path / "Selected Folder"/"Selected File.pdf"
     )
     assert filed["status"] == "filed"
-    assert (tmp_path / "Selected Folder\\Selected File.pdf").with_suffix(
+    assert (tmp_path / "Selected Folder"/"Selected File.pdf").with_suffix(
         ".txt"
     ).read_text(encoding="utf-8") == "searchable text"
 
@@ -122,7 +122,7 @@ def test_updated_xml_metadata(tmp_path, monkeypatch):
 
     After copying a real fixture PDF, the test reopens it with pikepdf and checks that the
     reviewed address is present alongside the expected destination and OCR text file."""
-    source = TEST_DIR / "\\Site Plan - Lot 104.pdf"
+    source = TEST_DIR / "Site Plan - Lot 104.pdf"
     
     document = {
         "source_path": str(source),
@@ -144,7 +144,7 @@ def test_updated_xml_metadata(tmp_path, monkeypatch):
     )
 
     pdf = pikepdf.Pdf.open(
-        str(tmp_path / "Selected Folder\\Selected File.pdf")
+        str(tmp_path / "Selected Folder"/"Selected File.pdf")
     )
     test_dict = {}
     with pdf.open_metadata() as meta:
@@ -154,14 +154,14 @@ def test_updated_xml_metadata(tmp_path, monkeypatch):
 
     assert (
         source.exists()
-        and (tmp_path / "Selected Folder\\Selected File.pdf").exists()
+        and (tmp_path / "Selected Folder"/ "Selected File.pdf").exists()
     )
     assert source.name == "Site Plan - Lot 104.pdf"
     assert filed["filed_path"] == str(
-        tmp_path / "Selected Folder\\Selected File.pdf"
+        tmp_path / "Selected Folder"/ "Selected File.pdf"
     )
     assert filed["status"] == "filed"
-    assert (tmp_path / "Selected Folder\\Selected File.pdf").with_suffix(
+    assert (tmp_path / "Selected Folder"/"Selected File.pdf").with_suffix(
         ".txt"
     ).read_text(encoding="utf-8") == "searchable text"
     assert test_dict.get("Address") == "2432 COMPTROLLERS CT"
@@ -219,18 +219,18 @@ def test_filing_with_duplicate_doc_name(tmp_path, monkeypatch):
     )
 
     assert not source1.exists() and not source2.exists()
-    assert (tmp_path / "Generated Folder\\Generated Name.pdf").exists() and (
-        tmp_path / "Generated Folder\\Generated Name (2).pdf"
+    assert (tmp_path / "Generated Folder"/"Generated Name.pdf").exists() and (
+        tmp_path / "Generated Folder"/"Generated Name (2).pdf"
     ).exists()
     assert (
-        tmp_path / "Generated Folder\\Generated Name.pdf"
+        tmp_path / "Generated Folder"/"Generated Name.pdf"
     ).read_bytes() == b"original1-pdf-with-metadata" and (
-        tmp_path / "Generated Folder\\Generated Name (2).pdf"
+        tmp_path / "Generated Folder"/"Generated Name (2).pdf"
     ).read_bytes() == b"original2-pdf-with-metadata"
     assert filed1["filed_path"] == str(
-        tmp_path / "Generated Folder\\Generated Name.pdf"
+        tmp_path / "Generated Folder"/"Generated Name.pdf"
     ) and filed2["filed_path"] == str(
-        tmp_path / "Generated Folder\\Generated Name (2).pdf"
+        tmp_path / "Generated Folder"/"Generated Name (2).pdf"
     )
     assert filed1["status"] == "filed" and filed2["status"] == "filed"
     assert (
