@@ -1,4 +1,8 @@
-"""Small self-contained test for the visual-classifier joblib cache."""
+"""Self-contained regression check for visual-classifier model caching.
+
+Loading a joblib model for every PDF would waste scan time. This script confirms
+repeated reads reuse one object and that replacing the model file invalidates the
+cache through its modification timestamp."""
 
 from __future__ import annotations
 
@@ -12,8 +16,11 @@ from visual_classifier import _get_cached_model, clear_model_cache
 
 
 def main() -> None:
-    """Run the module as a command-line entry point.
-    """
+    """Verify both reuse and invalidation of the cached joblib visual model.
+
+    A temporary model is loaded twice and must return the same object identity. After the
+    file is replaced with a newer modification time, the next load must return the new
+    contents and a different object."""
     with tempfile.TemporaryDirectory(prefix="visual_model_cache_test_") as temp_dir:
         model_path = Path(temp_dir) / "synthetic.joblib"
 

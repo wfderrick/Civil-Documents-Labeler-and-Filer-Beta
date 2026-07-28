@@ -1,10 +1,14 @@
-"""Thread-safe in-memory scan progress tracking. Flask routes and background scan workers share this small module to publish phase, file, count, timing, completion, and error information.
+"""Thread-safe progress channel between a long scan and the browser.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+OCR may take minutes, while an HTTP request normally returns only when
+its work is complete. The application stores progress messages and stage
+timings in one protected dictionary. ``static/app.js`` polls the
+``/api/scan-progress`` route and redraws the progress panel from snapshots
+produced here.
+
+Every public function acquires the same lock before reading or changing
+the dictionary. That prevents a browser poll from seeing a half-updated
+message list while the scan thread is writing to it."""
 
 from __future__ import annotations
 
@@ -23,9 +27,11 @@ _SCAN_PROGRESS: dict[str, Any] = {
 
 
 def reset_scan_progress() -> None:
-    """The reset_scan_progress() function clears previous information from the
-    _SCAN_PROGRESS dictionary to start fresh when a new batch of documents is
-    being scanned."""
+    """Initialize a clean progress record at the start of a scan request.
+    
+    The function marks the scan active, records the start time, clears old messages and
+    timings, and resets finished/failed flags under the shared lock. The browser can begin
+    polling immediately after this call."""
     with _SCAN_PROGRESS_LOCK:
         _SCAN_PROGRESS.update(
             {
@@ -40,8 +46,10 @@ def reset_scan_progress() -> None:
 
 
 def add_scan_progress(message: str) -> None:
-    """The add_scan_progress() function takes in the message parameter and adds
-    it to the messages key in the _SCAN_PROGRESS dictionary."""
+    """Append one timestamped human-readable message to the active scan.
+    
+    Messages describe document/page progress and performance stages. The list is updated under
+    the lock so a simultaneous browser snapshot cannot observe a partially appended entry."""
     text = str(message or "").strip()
     if not text:
         return
@@ -60,7 +68,10 @@ def add_scan_progress(message: str) -> None:
 
 
 def set_scan_timing(name: str, elapsed: float) -> None:
-    """Record one named scan-stage duration for diagnostics and regression checks."""
+    """Store the final elapsed time for one named performance stage.
+    
+    Repeated calls with the same name replace the previous value. This is appropriate for
+    whole-scan stages such as configuration load, OCR engine startup, or total scan time."""
     key = str(name or "").strip()
     if not key:
         return
@@ -69,7 +80,11 @@ def set_scan_timing(name: str, elapsed: float) -> None:
 
 
 def add_scan_timing(name: str, elapsed: float) -> None:
-    """Accumulate a duration into a named scan stage."""
+    """Accumulate elapsed time into a named performance total.
+    
+    This variant is useful when the same stage occurs repeatedly—for example, adding several
+    page-level operations into one category—without requiring the caller to read the current
+    value first."""
     key = str(name or "").strip()
     if not key:
         return
@@ -79,8 +94,11 @@ def add_scan_timing(name: str, elapsed: float) -> None:
 
 
 def finish_scan_progress(*, failed: bool = False, message: str = "") -> None:
-    """The finish_scan_progress() function sets the _SCAN_PROGRESS dictionary to
-    its finished state after a batch has finished scanning."""
+    """Mark the current scan complete or failed and optionally append a final message.
+    
+    The active flag is cleared so the browser stops treating the timer as live. ``failed``
+    distinguishes a successful completion from an exception while preserving all messages and
+    timings for inspection."""
     if message:
         add_scan_progress(message)
     with _SCAN_PROGRESS_LOCK:
@@ -90,8 +108,11 @@ def finish_scan_progress(*, failed: bool = False, message: str = "") -> None:
 
 
 def scan_progress_snapshot() -> dict[str, Any]:
-    """The scan_progress_snapshot() function returns total time, active,
-    finished, and failed scans and messages in the _SCAN_PROGRESS dictionary."""
+    """Return a detached JSON-safe view of the current progress record.
+    
+    A deep copy is made while holding the lock, then elapsed time is calculated from the saved
+    start time. The browser receives a consistent snapshot and cannot mutate the server's live
+    dictionary through a shared reference."""
     with _SCAN_PROGRESS_LOCK:
         started_at = float(_SCAN_PROGRESS.get("started_at") or 0.0)
         elapsed = max(0.0, time.perf_counter() - started_at) if started_at else 0.0

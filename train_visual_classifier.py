@@ -1,10 +1,9 @@
-"""Command-line training entry point for the optional visual Field Notes classifier. It loads labeled samples, trains the model, evaluates it, and saves the serialized artifact.
+"""Command-line wrapper for training the optional Field Notes classifier.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+This file is not used during an ordinary browser scan. It lets a developer
+point the project at labeled ``field_notes`` and ``not_field_notes`` PDF
+folders, then delegates the actual feature extraction and model training
+to ``visual_classifier.train_visual_classifier``."""
 
 from __future__ import annotations
 
@@ -15,11 +14,11 @@ from visual_classifier import train_visual_classifier
 
 
 def main() -> int:
-    """Run the module as a command-line entry point.
+    """Parse command-line training options and launch visual-model training.
     
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    The required argument points to a folder containing ``field_notes`` and ``not_field_notes``
+    subfolders. ``--output`` controls where the joblib model is saved. Returning zero lets
+    ``SystemExit`` communicate a successful command-line run to scripts and shells."""
     parser = argparse.ArgumentParser(
         description="Train the binary visual Field Notes classifier."
     )

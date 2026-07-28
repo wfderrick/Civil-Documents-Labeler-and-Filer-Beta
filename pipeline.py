@@ -1,3 +1,25 @@
+"""Coordinate metadata extraction across a related batch of PDFs.
+
+Individual drawings in one project packet often repeat the same lot,
+address, map, parcel, and Tax ID. OCR may read each repetition slightly
+differently. This module asks every drawing for metadata, lets the
+documents vote on shared property values, and then uses SDAT to replace
+uncertain OCR values with authoritative property data when possible.
+
+Batch pipeline:
+    OCR records
+        -> per-document metadata extraction
+        -> remove lookup-only helper PDFs from normal voting
+        -> visually correct suspicious duplicate document types
+        -> vote on shared property fields
+        -> SDAT lookup in Tax ID / address / map-parcel priority order
+        -> merge shared fields back into each permanent document
+
+Document type and project code remain document-specific. Shared property
+fields are synchronized because the drawings in Batch mode represent one
+property. Mass mode calls the same machinery one PDF at a time with stricter
+lookup rules so unrelated jobs cannot contaminate one another."""
+
 from __future__ import annotations
 
 import re
@@ -30,35 +52,21 @@ from visual_classifier import (
     fix_duplicate_document_types_with_visual_classifier,
 )
 
-"""High-level scan pipeline. This module orchestrates PDF discovery, page OCR, metadata extraction, batch voting, SDAT enrichment, output naming, and creation of the document records consumed by the review interface.
-
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
 def vote_key(value: str) -> str:
-    """Vote key.
+    """Convert a metadata value into the key used for batch majority voting.
     
-    Args:
-        value: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    Case, punctuation, spacing, and common OCR confusions are removed so small formatting
+    differences such as ``Lot-104`` and ``LOT 104`` count as the same answer. The original
+    display form is retained separately by ``vote_for_value``."""
     return re.sub(r"[^a-z0-9]", "", normalize_for_fuzzy(value))
 
 
 def vote_for_value(values: Iterable[str], fallback: str) -> str:
-    """Vote for value.
+    """Choose the most frequently supported known value from several drawings.
     
-    Args:
-        values: Input used by this operation.
-        fallback: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    Placeholders are ignored. Each usable value is grouped by ``vote_key`` and counted, while
+    the first human-readable spelling is remembered for display. If no drawing supplies a
+    known value, the caller's fallback is returned."""
     seen_display: dict[str, str] = {}
     counts: Counter[str] = Counter()
     for value in values:
@@ -77,17 +85,11 @@ def extract_document_metadata_votes(
     default_project_code: str,
     default_document_type: str,
 ) -> list[ExtractedMetadata]:
-    """Extract document metadata votes.
+    """Run per-document extraction for an iterable of OCR scan records.
     
-    Args:
-        scanned_documents: Input used by this operation.
-        config: Input used by this operation.
-        default_project_code: Input used by this operation.
-        default_document_type: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    Each result is an independent opinion about the property and document type. The function
+    passes OCR page coordinates as well as text so address extraction can use title-block
+    layout. Batch voting happens later; no values are shared in this step."""
     return [
         extract_metadata(
             document.get("ocr_text", ""),
@@ -109,13 +111,11 @@ def _apply_sdat_record_to_shared(
     seed: ExtractedMetadata,
     record: dict[str, Any],
 ) -> None:
-    """Apply sdat record to shared.
+    """Copy authoritative values from one selected SDAT record into the shared batch dictionary.
     
-    Args:
-        shared: Input used by this operation.
-        seed: Input used by this operation.
-        record: Input used by this operation.
-    """
+    ``metadata_from_sdat_record`` performs field mapping and normalization. Only known values
+    overwrite the voted dictionary, so an empty SDAT column cannot erase useful OCR evidence.
+    Hidden SDAT fields are copied together with the visible property identifiers."""
     resolved = metadata_from_sdat_record(seed, record)
     # SDAT is authoritative for the visible property fields and for the hidden
     # values that are persisted only in the document record and XMP packet.
@@ -136,19 +136,22 @@ def _apply_sdat_record_to_shared(
 
 
 def _normalized_address(value: str) -> str:
-    """Return a comparison-only address key with punctuation and spacing removed."""
+    """Create a strict address key for equality and containment checks.
+    
+    Uppercasing and removing all non-alphanumeric characters allows ``12 Main St.`` to match
+    ``12 MAIN STREET`` closely enough for uniqueness checks without changing the displayed
+    address stored in metadata."""
     return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
 
 
 def _confident_unique_address_record(
     address: str, records: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
-    """Return one SDAT record only when the OCR address identifies it uniquely.
-
-    Mass Scan documents are independent.  This guard prevents an ambiguous
-    address lookup (for example, a shared street address with several parcels)
-    from silently assigning the first SDAT Tax ID to multiple PDFs.
-    """
+    """Accept an address lookup only when exactly one returned SDAT record clearly matches.
+    
+    This guard is used by Mass Scan, where neighboring PDFs are unrelated. Candidate addresses
+    are normalized and considered when equal or when one fully contains the other. Zero or
+    multiple convincing records returns ``None`` rather than guessing the first parcel."""
     target = _normalized_address(address)
     if not target:
         return None
@@ -172,21 +175,39 @@ def choose_batch_metadata_by_vote(
     strict_independent_lookup: bool = False,
     performance_callback=None,
 ) -> tuple[dict[str, str], list[ExtractedMetadata]]:
-    """Choose shared metadata while reporting detailed performance timings.
-
-    ``performance_callback`` receives concise terminal-safe lines. It is optional
-    so existing callers and tests remain compatible.
-    """
+    """Produce shared property metadata and per-document classifications for a scan set.
+    
+    Detailed workflow:
+        1. Extract metadata from each OCR record and collect stage timings.
+        2. Separate SDAT printouts from permanent engineering documents.
+        3. Optionally use the visual classifier to repair suspicious duplicate plan types.
+        4. Vote on lot, address, map, parcel, Tax ID, and section across normal drawings.
+        5. Build an SDAT seed and try the most reliable lookup available: Tax ID first,
+           address second, and map/parcel last.
+        6. Copy authoritative SDAT values into the shared dictionary and emit a ranked
+           performance report.
+    
+    ``strict_independent_lookup`` changes safety rules for Mass Scan: address results must be
+    uniquely convincing and broad map/parcel fallback is disabled. The function returns the
+    shared dictionary plus the original per-document metadata list, whose document types stay
+    independent."""
     emit = performance_callback or (lambda _message: None)
     stage_rows: list[tuple[str, float, str]] = []
     total_started = time.perf_counter()
 
     def timed(label: str, started: float, detail: str = "") -> float:
+        """Measure, store, and immediately report one batch-pipeline stage.
+        
+        The saved rows later become a ranked performance report. The optional detail text records
+        context such as document count, record count, or which lookup resolved the property."""
         elapsed = time.perf_counter() - started
         stage_rows.append((label, elapsed, detail))
         emit(f"[PERF] {label}: {elapsed:.4f}s" + (f" | {detail}" if detail else ""))
         return elapsed
 
+    # PHASE 1 - Ask each PDF independently before sharing any information.
+    # Keeping these raw votes is essential for document-specific type labels
+    # and for diagnosing which sheet supplied a questionable value.
     extraction_started = time.perf_counter()
     votes: list[ExtractedMetadata] = []
     for index, document in enumerate(scanned_documents, start=1):
@@ -209,6 +230,8 @@ def choose_batch_metadata_by_vote(
     timed("metadata.extract.all_documents", extraction_started, f"documents={len(votes)}")
 
     partition_started = time.perf_counter()
+    # PHASE 2 - SDAT printouts are evidence, not permanent drawings. Separate
+    # them so their placeholder lot/address values cannot weaken the vote.
     lookup_indexes = [
         i for i, vote in enumerate(votes) if vote.document_type == LOOKUP_DOCUMENT_TYPE
     ]
@@ -236,6 +259,8 @@ def choose_batch_metadata_by_vote(
     lookup_tax_ids = [
         votes[i].tax_id for i in lookup_indexes if is_known_value(votes[i].tax_id)
     ]
+    # PHASE 4 - Create the packet-level property record. A lookup PDF Tax ID
+    # outranks OCR votes because it comes from the government printout itself.
     shared = {
         "lot": vote_for_value((vote.lot for vote in normal_votes), "Unknown Lot"),
         "address": vote_for_value(
@@ -272,6 +297,9 @@ def choose_batch_metadata_by_vote(
     county = str(config.get("default_county", "") or "")
     timed("sdat.prepare_seed", seed_started, f"county={county or 'none'}")
 
+    # PHASE 5 - Enrich only after voting. A Tax ID is the strongest key, an
+    # address is next, and map/parcel are broader fallbacks. Returning as soon
+    # as a stronger lookup succeeds avoids slower and less reliable queries.
     # Priority 1: explicit Tax ID.
     if is_known_value(shared["tax_id"]):
         lookup_started = time.perf_counter()
@@ -350,7 +378,11 @@ def choose_batch_metadata_by_vote(
 
 
 def _emit_performance_summary(emit, rows: list[tuple[str, float, str]]) -> None:
-    """Emit a copy/paste-friendly performance block sorted by elapsed time."""
+    """Print a copy-and-paste-friendly ranking of metadata and SDAT stage durations.
+    
+    Rows are sorted slowest first and expressed as seconds plus percentage of total time. The
+    explicit START/END markers let a user paste exactly one report back into a debugging chat
+    or issue without unrelated Flask access-log lines."""
     total = next((seconds for label, seconds, _ in reversed(rows) if label == "metadata_and_sdat.total"), 0.0)
     emit("=== COAB PERFORMANCE REPORT START ===")
     emit(f"report_version=3.0; metadata_sdat_total_seconds={total:.4f}")
@@ -374,19 +406,14 @@ def merge_batch_metadata(
     shared_metadata: Mapping[str, str],
     document_metadata: ExtractedMetadata | None = None,
 ) -> ExtractedMetadata:
-    """Merge batch metadata.
+    """Combine one drawing's own classification with the batch's shared property values.
     
-    Args:
-        document_text: Input used by this operation.
-        config: Input used by this operation.
-        default_project_code: Input used by this operation.
-        default_document_type: Input used by this operation.
-        shared_metadata: Input used by this operation.
-        document_metadata: Input used by this operation.
+    The document keeps its own document type and extracted details, while known shared lot,
+    address, map, parcel, Tax ID, section, and hidden SDAT fields take precedence. Unknown
+    shared values fall back to the individual drawing rather than erasing it.
     
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    The project code is deliberately taken from the scan setting/folder convention so every
+    document in the packet is filed under the same project even if OCR reads a stray code."""
     document_metadata = document_metadata or extract_metadata(
         document_text, config, default_project_code, default_document_type
     )

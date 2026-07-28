@@ -1,10 +1,18 @@
-"""Persistent application-state repository. All reads and writes to the JSON review-state file pass through a process lock and centralized mutation helpers to reduce lost updates during Mass Scan and UI editing.
+"""Persistent repository for settings and the live review queue.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+The browser and scan process share ``.review_state/documents.json``.
+Mass Scan may append a completed PDF at the same time the user edits or
+files an earlier one. A simple "read, change, write" sequence in separate
+functions could lose one of those changes.
+
+This module solves that problem with a re-entrant lock and atomic writes:
+    1. Acquire the lock.
+    2. Read the newest JSON from disk.
+    3. Apply one caller-supplied mutation.
+    4. Write a temporary file and replace the real file in one operation.
+
+Callers should prefer the narrow helpers such as ``append_document`` or
+``update_document`` instead of editing the state file directly."""
 
 from __future__ import annotations
 
@@ -29,12 +37,19 @@ StateMutator = Callable[[dict[str, Any]], T]
 
 
 def _default_state() -> dict[str, Any]:
-    """Return a fresh default state so callers cannot mutate a shared object."""
+    """Create a fresh empty state object for a first run or unreadable state file.
+    
+    A deep copy is required because nested ``settings`` and ``documents`` containers must not be
+    shared between callers; mutating one request's default should not alter the module constant."""
     return copy.deepcopy(DEFAULT_STATE)
 
 
 def _read_state_unlocked() -> dict[str, Any]:
-    """Read state while the caller already holds ``_STATE_FILE_LOCK``."""
+    """Read and normalize the state file while the caller already owns the lock.
+    
+    Missing files return a fresh default. Existing JSON is checked so ``settings`` is a dictionary
+    and ``documents`` is a list, preventing malformed or older state shapes from causing failures
+    throughout the UI. This private helper never acquires the lock itself."""
     if not STATE_FILE.exists():
         return _default_state()
     with STATE_FILE.open("r", encoding="utf-8") as state_file:
@@ -45,7 +60,11 @@ def _read_state_unlocked() -> dict[str, Any]:
 
 
 def _write_state_unlocked(state: dict[str, Any]) -> None:
-    """Atomically write state while the caller holds ``_STATE_FILE_LOCK``."""
+    """Persist state safely through a temporary file and atomic replacement.
+    
+    JSON is written completely to a sibling temporary path, flushed to disk, and then moved over
+    the real state file with ``os.replace``. Readers therefore see either the previous complete
+    JSON or the new complete JSON, never a half-written file. The caller must hold the lock."""
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporary_file = STATE_FILE.with_suffix(".json.tmp")
     with temporary_file.open("w", encoding="utf-8") as state_file:
@@ -56,28 +75,33 @@ def _write_state_unlocked(state: dict[str, Any]) -> None:
 
 
 def read_state() -> dict[str, Any]:
-    """Return the latest persisted application settings and review documents."""
+    """Return a detached snapshot of the latest persisted settings and documents.
+    
+    The lock protects the disk read, and a deep copy prevents the caller from accidentally
+    modifying in-memory data that another operation assumes is stable. Use a mutation helper to
+    make persistent changes."""
     with _STATE_FILE_LOCK:
         return _read_state_unlocked()
 
 
 def write_state(state: dict[str, Any]) -> None:
-    """Atomically replace the persisted state.
-
-    Prefer the narrower mutation helpers below for request-time updates. They
-    keep the read/modify/write sequence under one lock and therefore avoid
-    overwriting edits made by another request.
-    """
+    """Replace the entire state under the repository lock.
+    
+    This broad operation is mainly useful for deliberate full replacements. Request-time code
+    should prefer ``mutate_state`` and its narrower wrappers, which re-read the newest state before
+    changing it and are less likely to overwrite concurrent Mass Scan or browser updates."""
     with _STATE_FILE_LOCK:
         _write_state_unlocked(state)
 
 
 def mutate_state(mutator: StateMutator[T]) -> tuple[dict[str, Any], T]:
-    """Apply one mutation to the newest state and persist it atomically.
-
-    The lock covers the complete read/modify/write transaction. The callback
-    may mutate the supplied state and optionally return a useful result.
-    """
+    """Execute one read-modify-write transaction against the newest state.
+    
+    The lock remains held while the current JSON is read, the caller's callback changes it, and
+    the updated JSON is atomically written. The function returns both a deep-copied final state and
+    the callback's result. This is the central concurrency safeguard for the review queue."""
+    # The callback runs while the lock is held. This is deliberate: releasing
+    # between read and write would allow a second request to create a lost update.
     with _STATE_FILE_LOCK:
         state = _read_state_unlocked()
         result = mutator(state)
@@ -89,7 +113,11 @@ def replace_state(
     *, settings: dict[str, Any] | None = None,
     documents: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Replace the scan state intentionally, such as when starting a new scan."""
+    """Intentionally replace settings and the document queue at a scan boundary.
+    
+    Batch scan calls this after producing its complete set. Mass scan calls it first with an empty
+    queue, then appends documents incrementally. Arguments are deep-copied so later caller changes
+    cannot silently alter what was persisted."""
     new_state = {
         "settings": copy.deepcopy(settings or {}),
         "documents": copy.deepcopy(documents or []),
@@ -99,18 +127,17 @@ def replace_state(
 
 
 def append_document(document: dict[str, Any]) -> list[dict[str, Any]]:
-    """Append a document if its id is not already in the active review queue."""
+    """Add one completed scan result without duplicating an existing record ID.
+    
+    The duplicate check and append happen inside one locked mutation. This matters during Mass
+    Scan because the browser may be reading, editing, or filing records while new PDFs finish OCR."""
     document_copy = copy.deepcopy(document)
 
     def append(latest_state: dict[str, Any]) -> list[dict[str, Any]]:
-        """Append.
+        """Perform the duplicate-ID check and append while ``mutate_state`` owns the lock.
         
-        Args:
-            latest_state: Input used by this operation.
-        
-        Returns:
-            The computed result for the caller. See the function body and type hints for the exact shape.
-        """
+        Returning ``False`` tells the caller the record was already present; returning ``True`` means
+        a deep-copied document was added to the live queue."""
         documents = latest_state.setdefault("documents", [])
         document_id = document_copy.get("id")
         if not any(item.get("id") == document_id for item in documents):
@@ -122,16 +149,15 @@ def append_document(document: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def remove_document(document_id: str) -> tuple[dict[str, Any], bool]:
-    """Remove one document from the active review queue by id."""
+    """Remove one review record by ID without disturbing documents added concurrently.
+    
+    Single-document filing uses this after the PDF succeeds. The locked mutation re-reads the
+    newest queue, filters only the target ID, and reports whether a record was actually removed."""
     def remove(latest_state: dict[str, Any]) -> bool:
-        """Remove.
+        """Filter the live document list and report whether its length changed.
         
-        Args:
-            latest_state: Input used by this operation.
-        
-        Returns:
-            The computed result for the caller. See the function body and type hints for the exact shape.
-        """
+        This nested function runs inside the repository transaction, so the list includes any Mass
+        Scan results appended immediately before the removal began."""
         documents = latest_state.setdefault("documents", [])
         original_count = len(documents)
         latest_state["documents"] = [
@@ -143,21 +169,26 @@ def remove_document(document_id: str) -> tuple[dict[str, Any], bool]:
 
 
 def clear_documents() -> dict[str, Any]:
-    """Clear the active review queue while preserving the latest settings."""
+    """Empty the active review queue while preserving the latest settings.
+    
+    File-All calls this only after permanent PDFs have been filed successfully. Configuration and
+    folder choices remain available for the next scan."""
     state, _ = mutate_state(lambda latest_state: latest_state.__setitem__("documents", []))
     return state
 
 
 def update_settings(values: dict[str, Any]) -> dict[str, Any]:
-    """Merge supplied values into the latest persisted settings."""
+    """Merge selected setting values into the newest persisted settings dictionary.
+    
+    Existing keys not mentioned by the caller are preserved. The merge happens under the state
+    transaction lock so it cannot erase documents appended by a concurrent scan."""
     values_copy = copy.deepcopy(values)
 
     def update(latest_state: dict[str, Any]) -> None:
-        """Update.
+        """Apply a shallow settings merge inside the locked state transaction.
         
-        Args:
-            latest_state: Input used by this operation.
-        """
+        A shallow merge is appropriate because the current settings are simple scalar values rather
+        than nested configuration trees."""
         latest_state.setdefault("settings", {}).update(values_copy)
 
     state, _ = mutate_state(update)
@@ -168,18 +199,16 @@ def update_document(
     document_id: str,
     updater: Callable[[dict[str, Any], dict[str, Any]], T],
 ) -> tuple[dict[str, Any], T]:
-    """Update one document against the latest state in a locked transaction. It
-    has a child function named ``update()`` which takes in the current state and then
-    uses the ``updater`` and ``document_id`` parameters to update the state and the
-    document with document_id. It returns the result of calling 
-    ``mutate_state()`` with the ``update()`` function as a parameter.
-
-    ``updater`` receives ``(state, document)`` and may mutate either. A
-    ``KeyError`` is raised when the document no longer exists.
-    """
+    """Find one live document and update it atomically with caller-supplied business logic.
+    
+    The callback receives both the newest full state and the matching mutable document. That lets
+    ``apply_document_update`` synchronize batch peers while still completing one disk transaction.
+    A missing ID raises ``KeyError`` so the Flask route can return a 404."""
     def update(latest_state: dict[str, Any]) -> T:
-        """Updates the current state and document matching the document id taken
-        from the parent function ``update_document()``."""
+        """Locate the requested record and run the supplied updater under the file lock.
+        
+        The updater may edit the selected record and other records in the same state. Its return value
+        is passed back through ``mutate_state`` for the API response."""
         document = next(
             (
                 item
@@ -196,23 +225,26 @@ def update_document(
 
 
 def update_output_folder(raw_value: str) -> tuple[dict[str, Any], Path]:
-    """Validate/create an output folder and persist it in the latest settings."""
+    """Validate/create an output folder and save it in the latest settings atomically.
+    
+    This wrapper packages ``update_output_folder_setting`` as a repository mutation, returning
+    both the updated state and resolved ``Path`` to the Flask route."""
     def update(latest_state: dict[str, Any]) -> Path:
-        """Update.
+        """Apply output-folder validation while the state repository lock is held.
         
-        Args:
-            latest_state: Input used by this operation.
-        
-        Returns:
-            The computed result for the caller. See the function body and type hints for the exact shape.
-        """
+        The nested callback changes only the in-memory state supplied by ``mutate_state``; the outer
+        transaction performs the atomic disk write afterward."""
         return update_output_folder_setting(latest_state, raw_value)
 
     return mutate_state(update)
 
 
 def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
-    """Set a validated output-folder value on an in-memory state object."""
+    """Resolve, create, and store an output directory on an in-memory state object.
+    
+    Blank values are rejected because normal filing requires a destination. Parent folders are
+    created as needed, and the absolute path is stored as text for JSON serialization. This helper
+    does not lock or write the state file by itself."""
     value = str(raw_value or "").strip()
     if not value:
         raise ValueError("Output folder is required.")
@@ -223,14 +255,11 @@ def update_output_folder_setting(state: dict[str, Any], raw_value: str) -> Path:
 
 
 def load_config_from_state(state: dict[str, Any]) -> dict[str, Any]:
-    """Load config from state.
+    """Load the effective extraction configuration associated with a saved review state.
     
-    Args:
-        state: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    Browser edits that trigger SDAT refresh must use the same config path and county as the scan
+    that created the documents. The function resolves that path, falls back to built-in defaults
+    when absent, and overlays the saved county for the new lookup."""
     settings = state.get("settings", {})
     config_path = Path(settings.get("config_path") or DEFAULT_CONFIG_PATH).resolve()
     config = load_config(config_path if config_path.exists() else None)

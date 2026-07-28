@@ -1,10 +1,17 @@
-"""PDF rendering and text-layer utilities. These helpers rasterize pages for OCR, inspect existing text, build review PDFs, and handle temporary files used by the scan pipeline.
+"""Write searchable project information into a completed PDF's metadata.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+Filing is more than renaming a file. Before the PDF reaches its final
+folder, this module adds two kinds of metadata:
+    * Standard PDF fields such as Title, Subject, Keywords, and Creator.
+    * Structured XMP fields in a custom ``coa`` namespace.
+
+Standard fields are visible in many file browsers and PDF applications.
+XMP fields preserve detailed SDAT information for future searching or
+automation without cluttering the current review interface.
+
+Metadata writing is intentionally best-effort. A failure to add optional
+XMP fields should be reported, but it should not destroy an otherwise
+valid PDF or undo a successful filing operation."""
 
 from __future__ import annotations
 
@@ -21,10 +28,11 @@ except Exception:  # noqa: BLE001
 
 
 def metadata_keyword_text(document: dict[str, Any]) -> str:
-    """The ``metadata_keyword_text()`` function returns a string of important
-    keywords to be placed as metadata with the document given by the document
-    parameter. Each of the items is separated by a semicolon.
-    """
+    """Build one searchable semicolon-separated summary of a filed document.
+    
+    The string includes visible project fields, the original filename, and filing time.
+    Standard PDF Keywords and XMP both use it, giving Windows search and PDF tools a compact
+    text representation even when they do not understand the custom XMP namespace."""
     metadata = document.get("metadata", {})
     custom_text = {
         "lot": metadata.get("lot", ""),
@@ -46,14 +54,11 @@ def metadata_keyword_text(document: dict[str, Any]) -> str:
 def write_standard_pdf_metadata(
     pdf_path: Path, document: dict[str, Any]
 ) -> None:
-    """The ``write_standard_pdf_metadata()`` function updates the Windows
-    metadata which is visible in the file explorer for the pdf at the path
-    specified by the pdf_path parameter. First the metadata is saved from the
-    document parameter. Then using the ``Pymupdf`` library's ``open()`` and
-    ``set_metadata()`` functions, title, subject, keywords, and creator are
-    set to match the values gathered from the metadata field contained in the
-    document parameter. The pdf is then saved with the new metadata.
-    """
+    """Update the PDF metadata fields commonly visible in file browsers and readers.
+    
+    PyMuPDF opens the already prepared PDF, keeps unrelated existing metadata, and replaces
+    Title, Subject, Keywords, and Creator with project-aware values. ``saveIncr`` writes an
+    incremental update instead of rebuilding the whole PDF."""
     metadata = document.get("metadata", {})
     with fitz.open(pdf_path) as pdf:
         pdf.set_metadata(
@@ -69,7 +74,15 @@ def write_standard_pdf_metadata(
 
 
 def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
-    """Write structured XMP metadata with a custom COA namespace."""
+    """Store detailed project and SDAT values in structured XMP metadata.
+    
+    If ``pikepdf`` is unavailable, standard metadata still works and this optional step is
+    skipped. Otherwise the function registers the custom ``coa`` namespace, writes common
+    Dublin Core/PDF fields, then copies every non-empty project and property value to a named
+    XMP field.
+    
+    The PDF is opened with permission to overwrite itself. Errors are caught and printed
+    because losing optional metadata should not corrupt or block an otherwise filed document."""
     if pikepdf is None:
         return
 
@@ -182,9 +195,11 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
 
 
 def write_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
-    """The ``write_pdf_metadata()`` function updates the windows metadata and
-    adds custom XML metadata to the file located at the pdf_path parameter using
-    the document parameter as the source of the metadata."""
+    """Run both metadata writers as one best-effort filing step.
+    
+    Standard metadata is attempted first and protected by its own exception handler. XMP is
+    attempted afterward even if the standard update failed. ``file_document_to_output`` calls
+    this facade so it does not need to know which PDF libraries are installed."""
 
     try:
         write_standard_pdf_metadata(pdf_path, document)

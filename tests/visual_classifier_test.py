@@ -1,10 +1,8 @@
-"""Implementation module for the COABarrett File Identifier and Sorter. It groups related application behavior and is documented to help future maintainers trace data flow and side effects.
+"""Command-line inspection tool for the binary visual document classifier.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+This is not a normal pytest test. A developer gives it one PDF or a folder, and it
+prints the model's Field Notes/Other decision and confidence so model behavior can
+be checked against real drawings."""
 
 from __future__ import annotations
 
@@ -15,11 +13,11 @@ from visual_classifier import classify_pdf_visual
 
 
 def main() -> int:
-    """Run the module as a command-line entry point.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Run the visual classifier manually against one PDF or every PDF in a folder.
+
+    ArgumentParser collects the path, each PDF is passed to classify_pdf_visual(), and the
+    label/confidence are printed for human inspection. Returning zero signals that the
+    inspection command completed normally."""
     parser = argparse.ArgumentParser(
         description="Test the binary visual Field Notes classifier on PDFs."
     )

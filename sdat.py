@@ -1,10 +1,18 @@
-"""Maryland SDAT lookup client and record-selection logic. It normalizes addresses and parcel identifiers, queries available SDAT endpoints, ranks candidate records, and returns property metadata suitable for review.
+"""Query Maryland SDAT property records and merge authoritative results.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+OCR can discover identifiers printed on a plan, but it cannot prove that
+a value is correct. This module converts the available identifiers into
+Socrata/SoQL queries against Maryland's Real Property dataset, ranks or
+filters the returned records, and maps SDAT columns into the application's
+``ExtractedMetadata`` object.
+
+Lookup priority elsewhere in the app is deliberate:
+    1. District + account number (Tax ID) is most specific.
+    2. Street address is useful but can match several parcels.
+    3. Tax map / parcel are fallbacks when stronger identifiers are absent.
+
+Network results are treated cautiously. Mass Scan requires a uniquely
+convincing address match because every PDF may represent a different job."""
 
 from __future__ import annotations
 
@@ -106,7 +114,11 @@ SDAT_METADATA_FIELDS = (
 
 @dataclass(frozen=True)
 class SdatSearchTerms:
-    """Represent SdatSearchTerms behavior and related state."""
+    """Normalized identifiers available for one Maryland property lookup.
+    
+    The object separates county, lot, map, parcel, district, and account number so lookup code
+    can build strategies from strongest to weakest. ``tax_id`` is retained for context, while
+    district/account are the components actually used by the most specific query."""
 
     county: str = ""
     lot: str = ""
@@ -118,7 +130,11 @@ class SdatSearchTerms:
 
 
 def lookup_by_tax_id(tax_id: str, county: str = "") -> list[dict[str, Any]]:
-    """Perform the fastest, most specific SDAT lookup for a Tax ID."""
+    """Perform the application's most specific SDAT lookup from a Tax ID.
+    
+    The canonical Tax ID is split into district and account components. Invalid or incomplete
+    values return no records immediately; valid parts are wrapped in ``SdatSearchTerms`` and
+    delegated to the general strategy engine."""
     district, account_number = extract_tax_id_parts(tax_id)
     if not district or not account_number:
         return []
@@ -133,7 +149,12 @@ def lookup_by_tax_id(tax_id: str, county: str = "") -> list[dict[str, Any]]:
 
 
 def is_sdat_lookup_document(text: str) -> bool:
-    """Identify an SDAT printout using several stable page anchors."""
+    """Distinguish an SDAT property printout from an engineering drawing.
+    
+    The check uses several stable government-page phrases rather than one fragile title. A
+    strong department/search header plus account block is sufficient, or at least four known
+    anchors may identify the page. Lookup printouts supply property evidence but are not filed
+    as permanent plan documents."""
     normalized = normalize_for_fuzzy(text)
     hits = sum(
         normalize_for_fuzzy(anchor) in normalized
@@ -152,7 +173,11 @@ def is_sdat_lookup_document(text: str) -> bool:
 
 
 def extract_sdat_lookup_tax_id(text: str) -> tuple[str, str, str] | None:
-    """Extract district/account from an SDAT printout and build its Tax ID."""
+    """Read district and account number directly from an SDAT printout's OCR text.
+    
+    Ordered patterns handle common page layouts and OCR punctuation. Letter-shaped digit errors
+    are repaired, district is padded to two digits, and account is padded to six. The function
+    returns both components plus the canonical combined Tax ID for downstream voting."""
     patterns = (
         r"\bdistrict\s*[-:#]?\s*([0-9Oo]{1,2})\s+account\s+(?:number|no\.?|#)\s*[-:#]?\s*([0-9OoIl]{4,10})\b",
         r"\baccount\s+identifier.{0,80}?district\s*[-:#]?\s*([0-9Oo]{1,2}).{0,80}?account\s+(?:number|no\.?|#)\s*[-:#]?\s*([0-9OoIl]{4,10})\b",
@@ -175,30 +200,21 @@ def extract_sdat_lookup_tax_id(text: str) -> tuple[str, str, str] | None:
 
 
 def soql_escape(value: str) -> str:
-    """Soql escape.
-
-    Args:
-        value: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Escape a value before inserting it into a quoted SoQL filter.
+    
+    Socrata uses two apostrophes to represent one literal apostrophe. Applying that rule here
+    prevents an address or county name containing an apostrophe from breaking the query string."""
     return str(value or "").replace("'", "''").strip()
 
 
 def or_equals(
     field: str, value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)
 ) -> str:
-    """Or equals.
-
-    Args:
-        field: Input used by this operation.
-        value: Input used by this operation.
-        widths: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Build a parenthesized SoQL condition covering equivalent identifier formats.
+    
+    SDAT may store the same number with different leading-zero widths. ``identifier_options``
+    generates those forms, and this helper joins exact comparisons with ``OR`` so one request
+    can match any valid representation."""
     options = identifier_options(value, widths)
     return (
         "("
@@ -212,16 +228,13 @@ def or_equals(
 def extract_sdat_search_terms(
     text: str, metadata: ExtractedMetadata, config: Config
 ) -> SdatSearchTerms:
-    """Extract sdat search terms.
-
-    Args:
-        text: Input used by this operation.
-        metadata: Input used by this operation.
-        config: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Assemble the strongest available property identifiers from OCR, metadata, and configuration.
+    
+    Existing extracted metadata is preferred; missing values are searched directly from text.
+    County falls back to the configured default, and a Tax ID is split into district/account.
+    Unknown placeholders are converted to empty terms so they cannot become query filters.
+    
+    Values are sanitized into stable strings before being placed in ``SdatSearchTerms``."""
     county = first_match(
         text, config.get("county_patterns", [])
     ) or config.get("default_county", "")
@@ -279,7 +292,11 @@ def extract_sdat_search_terms(
 
 
 def selected_sdat_fields() -> list[str]:
-    """Return every Socrata column needed for matching and PDF metadata."""
+    """Return the exact Maryland dataset columns needed by matching and PDF metadata.
+    
+    Restricting ``$select`` reduces response size while still including core identifiers,
+    formatted-address components, links, and every hidden SDAT field written to XMP. The field
+    list is built centrally so query and mapping code cannot drift apart."""
     core_fields = [
         SDAT_FIELDS["county"],
         SDAT_FIELDS["account_id"],
@@ -303,15 +320,11 @@ def selected_sdat_fields() -> list[str]:
 
 
 def sdat_get(where_parts: list[str], limit: int = 200) -> list[dict[str, Any]]:
-    """Query the Maryland Open Data SDAT endpoint with the selected columns.
-
-    Args:
-        where_parts: SoQL predicates joined with ``AND``.
-        limit: Maximum number of property records to request.
-
-    Returns:
-        Decoded SDAT records returned by the Socrata API.
-    """
+    """Send one filtered request to Maryland's Socrata endpoint and decode the records.
+    
+    Caller-supplied predicates are joined with ``AND`` and only selected columns are requested.
+    A 20-second timeout prevents a stalled network call from hanging a scan indefinitely.
+    Unsuccessful responses print the request and body for diagnosis before raising the HTTP error."""
     if not where_parts:
         return []
     response = requests.get(
@@ -333,16 +346,11 @@ def sdat_get(where_parts: list[str], limit: int = 200) -> list[dict[str, Any]]:
 def record_identifier_matches(
     record: dict[str, Any], key: str, target: str
 ) -> bool:
-    """Record identifier matches.
-
-    Args:
-        record: Input used by this operation.
-        key: Input used by this operation.
-        target: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Compare one returned SDAT identifier with a target independent of padding or punctuation.
+    
+    Human-facing names such as ``tax_map`` are translated to dataset field keys, then both sides
+    pass through ``normalize_identifier``. An empty target imposes no restriction and therefore
+    matches every record."""
     if not target:
         return True
     field = {"tax_map": "map", "account_number": "account_number"}.get(
@@ -356,15 +364,11 @@ def record_identifier_matches(
 def filter_sdat_records(
     records: list[dict[str, Any]], terms: SdatSearchTerms
 ) -> list[dict[str, Any]]:
-    """Filter sdat records.
-
-    Args:
-        records: Input used by this operation.
-        terms: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Narrow a broad SDAT result set with every confident identifier available.
+    
+    Map, parcel, lot, district, and account filters are applied one record at a time. If filtering
+    removes everything, the original records are returned rather than pretending the network
+    lookup failed; the caller can still inspect or rank the broader result."""
     filtered = []
     for record in records:
         if terms.tax_map and not record_identifier_matches(
@@ -394,20 +398,25 @@ def filter_sdat_records(
 def lookup_maryland_property_records(
     terms: SdatSearchTerms,
 ) -> list[dict[str, Any]]:
-    """Lookup maryland property records.
-
-    Args:
-        terms: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Try SDAT query strategies from most specific to progressively broader fallbacks.
+    
+    Strategy order matters:
+        1. District + account + county.
+        2. District + account without county when county OCR may be wrong.
+        3. County + map.
+        4. County + parcel.
+    
+    The first strategy that returns records wins. Exact Tax ID strategies are trusted directly;
+    broader map/parcel results are post-filtered with the remaining identifiers. This ordering
+    reduces false matches and unnecessary network requests."""
     county_filter = (
         f"upper({SDAT_FIELDS['county']}) like upper('%{soql_escape(terms.county)}%')"
         if terms.county
         else ""
     )
 
+    # Each tuple contains query predicates plus a flag indicating whether broad
+    # results need local identifier filtering. Strategy order is the safety policy.
     strategies: list[tuple[list[str], bool]] = []
 
     # 1. Best: district + account + county
@@ -466,6 +475,8 @@ def lookup_maryland_property_records(
             )
         )
 
+    # Stop after the first successful strategy. Running weaker fallbacks after a
+    # precise account match would waste time and could introduce ambiguity.
     for where_parts, should_filter in strategies:
         records = sdat_get(where_parts)
         if records:
@@ -479,14 +490,11 @@ def lookup_maryland_property_records(
 
 
 def format_sdat_address(record: dict[str, Any]) -> str:
-    """Format sdat address.
-
-    Args:
-        record: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Build the display address used for review, naming, and address comparison.
+    
+    Separate premise number/name/type/city/ZIP columns are preferred. If they do not produce a
+    street address, the function falls back to Maryland's combined address fields. Empty pieces
+    are omitted so the result does not contain repeated spaces or placeholder punctuation."""
     number = normalize_value(record.get(SDAT_FIELDS["premise_number"], ""))
     street = normalize_value(record.get(SDAT_FIELDS["premise_name"], ""))
     street_type = normalize_value(record.get(SDAT_FIELDS["premise_type"], ""))
@@ -513,14 +521,11 @@ def format_sdat_address(record: dict[str, Any]) -> str:
 
 
 def tax_id_from_sdat_record(record: dict[str, Any]) -> str:
-    """Tax id from sdat record.
-
-    Args:
-        record: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Construct the canonical district-account Tax ID from one SDAT record.
+    
+    District and account values are normalized and padded to the widths expected by the app.
+    Missing either component returns an empty string, preventing a partial identifier from being
+    treated as authoritative."""
     district = normalize_value(record.get(SDAT_FIELDS["district"], ""))
     account = normalize_value(record.get(SDAT_FIELDS["account_number"], ""))
     if district and account:
@@ -529,7 +534,11 @@ def tax_id_from_sdat_record(record: dict[str, Any]) -> str:
 
 
 def normalize_sdat_metadata_value(value: Any) -> str:
-    """Convert an SDAT scalar or location object into stable metadata text."""
+    """Convert any SDAT field value into stable text suitable for JSON and XMP.
+    
+    Most columns are scalars, while location fields may be dictionaries or lists. Structured
+    values are serialized with sorted keys for repeatable output; scalars use ordinary metadata
+    normalization. Null and empty values remain empty."""
     if value in (None, ""):
         return ""
     if isinstance(value, (dict, list)):
@@ -540,18 +549,21 @@ def normalize_sdat_metadata_value(value: Any) -> str:
 def metadata_from_sdat_record(
     metadata: ExtractedMetadata, record: dict[str, Any]
 ) -> ExtractedMetadata:
-    """Merge one authoritative SDAT record into extracted document metadata.
-
-    Existing OCR values are preserved when SDAT omits a field. File-naming
-    fields are sanitized, while descriptive values and links are retained as
-    ordinary text for later XMP serialization.
-    """
+    """Merge one authoritative SDAT record into an immutable metadata result.
+    
+    Visible property fields are formatted and path-sanitized because they influence folder and
+    file names. Hidden dataset fields are converted to stable text for state and XMP. Any SDAT
+    column that is empty leaves the existing OCR value unchanged, so enrichment never replaces
+    useful evidence with a blank."""
     address = format_sdat_address(record)
     lot = normalize_value(record.get(SDAT_FIELDS["lot"], ""))
     tax_map = normalize_value(record.get(SDAT_FIELDS["map"], ""))
     parcel = normalize_value(record.get(SDAT_FIELDS["parcel"], ""))
     section = normalize_value(record.get(SDAT_FIELDS["section"], ""))
     tax_id = tax_id_from_sdat_record(record)
+    # ``replace`` creates a new frozen dataclass. Every field falls back to the
+    # prior OCR value when SDAT omitted it, so enrichment is additive rather
+    # than destructive.
     return replace(
         metadata,
         lot=safe_path_part(lot, metadata.lot) if lot else metadata.lot,
@@ -573,14 +585,11 @@ def metadata_from_sdat_record(
 
 
 def _address_tokens(address: str) -> tuple[str, list[str]]:
-    """Address tokens.
-
-    Args:
-        address: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Reduce a user/OCR address to a street number and a few strong street-name words.
+    
+    Punctuation, state names, street-type abbreviations, and other weak tokens are removed. The
+    remaining number and first three words are sufficient to create a selective Socrata query
+    without requiring exact spelling of the entire formatted address."""
     cleaned = re.sub(r"[^0-9A-Za-z ]", " ", str(address or "")).upper()
     parts = [part for part in cleaned.split() if part]
     number = parts[0] if parts and parts[0].isdigit() else ""
@@ -616,16 +625,15 @@ def _address_tokens(address: str) -> tuple[str, list[str]]:
 def lookup_maryland_property_by_address(
     address: str, county: str = "", limit: int = 100
 ) -> list[dict[str, Any]]:
-    """Lookup maryland property by address.
-
-    Args:
-        address: Input used by this operation.
-        county: Input used by this operation.
-        limit: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Query SDAT by street number/name and rank the returned properties by similarity.
+    
+    SDAT stores premise numbers as five-character strings, so the number is zero-padded before
+    querying. The first strong street word and optional county narrow the network result. Each
+    record is then scored by how many target tokens appear in its formatted address, with a large
+    bonus for an exact normalized match.
+    
+    The ordered list lets Batch mode use the best candidate and lets Mass mode apply an additional
+    uniqueness check before accepting it."""
     number, words = _address_tokens(address)
     if not number or not words:
         return []
@@ -647,14 +655,11 @@ def lookup_maryland_property_by_address(
     target = re.sub(r"[^A-Z0-9]", "", address.upper())
 
     def score(record: dict[str, Any]) -> int:
-        """Score.
-
-        Args:
-            record: Input used by this operation.
-
-        Returns:
-            The computed result for the caller. See the function body and type hints for the exact shape.
-        """
+        """Assign one address candidate a simple, explainable match score.
+        
+        The score counts the street number and strong street words present in the candidate and adds
+        an exact-address bonus. It is used only for sorting records returned by an already narrowed
+        SDAT query."""
         candidate = re.sub(
             r"[^A-Z0-9]", "", format_sdat_address(record).upper()
         )
@@ -668,16 +673,11 @@ def lookup_maryland_property_by_address(
 def enrich_metadata_with_sdat(
     metadata: ExtractedMetadata, text: str, config: Config
 ) -> ExtractedMetadata:
-    """Enrich metadata with sdat.
-
-    Args:
-        metadata: Input used by this operation.
-        text: Input used by this operation.
-        config: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Perform the general one-document SDAT enrichment path.
+    
+    When SDAT lookup is disabled, metadata passes through unchanged. Otherwise search terms are
+    extracted, the strategy engine is called, and the first successful record is merged. Batch
+    mode normally uses its more deliberate shared-field lookup in ``pipeline.py`` instead."""
     if not config.get("sdat_lookup", True):
         return metadata
     records = lookup_maryland_property_records(

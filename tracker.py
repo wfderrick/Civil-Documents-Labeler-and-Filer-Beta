@@ -1,10 +1,9 @@
-"""Output-change tracking helpers used to record files created, moved, or renamed by the application.
+"""Append a human-readable audit row after a batch is filed.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+The main application state describes work still being reviewed. Once a
+batch leaves that queue, this CSV provides a separate historical record
+of what property was filed, where it was filed, when it happened, and
+which filenames were created."""
 
 from __future__ import annotations
 
@@ -22,13 +21,13 @@ def append_batch_tracker(
     output_folder: Path,
     filed_documents: list[dict[str, Any]],
 ) -> None:
-    """The append_batch_tracker() function adds a new row to the ocr tracker
-    file when a batch of documents is filed with lot number,
-    address, location filed, time filed, project code, section, file count, and
-    files filed. It consolidates that information into a python dictionary and
-    uses the DictWriter() function to write a new line to the csv file. If the t
-    tracker hasn't been created yet a header is added at the start of the file
-    when it is created."""
+    """Append one audit row describing a successfully filed batch.
+    
+    The first permanent document supplies shared property/project values, while ``filed_documents``
+    supplies the actual destination filenames. The function creates ``C:\\ocr tracker`` when
+    needed, writes a header for a new/empty CSV, and appends rather than replacing prior history.
+    
+    Empty inputs return immediately because there is no meaningful completed batch to record."""
     if not documents or not filed_documents:
         return
 

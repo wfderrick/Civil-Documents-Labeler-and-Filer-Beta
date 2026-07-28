@@ -1,14 +1,45 @@
 /**
  * Browser-side controller for the COABarrett document review application.
  *
- * Responsibilities include loading server state, rendering the queue and review
- * form, managing the PDF viewer, validating metadata, polling scan progress, and
- * sending explicit user edits or filing commands back to Flask. Keep DOM-only
- * concerns here; extraction and file-system behavior belong in Python services.
+ * WHAT THIS FILE DOES FOR THE APP
+ * --------------------------------
+ * Python performs OCR, metadata extraction, SDAT lookups, PDF writing, and file
+ * movement. This JavaScript file controls what the reviewer sees and sends the
+ * reviewer's choices to the Flask routes in app.py.
+ *
+ * The browser keeps a temporary `state` object so it can draw the document queue,
+ * selected PDF, and metadata form without reloading the whole page. The saved
+ * version still lives on the server in `.review_state/documents.json`; after every
+ * important request, the server response replaces or updates this temporary copy.
+ *
+ * NORMAL DATA FLOW
+ * ----------------
+ *   User clicks or edits a control
+ *       -> this file builds a JSON request
+ *       -> app.py validates and processes it
+ *       -> Flask returns updated settings/documents
+ *       -> applyState() or replaceDocument() updates the browser
+ *       -> renderList() and renderSelectedDocument() redraw the interface
+ *
+ * TWO POLLING LOOPS ARE INTENTIONAL
+ * ---------------------------------
+ * `/api/scan-progress` supplies scan messages and measured stage timings.
+ * During Mass Scan, `/api/state` is also polled so each finished PDF appears for
+ * review before the entire input folder is complete.
  */
 
 const state = { documents: [], settings: {}, selectedId: null };
 
+/**
+ * Find one HTML element by ID.
+ *
+ * The review interface accesses the same controls many times. This short alias keeps
+ * those lookups readable while still returning the normal `HTMLElement` (or null)
+ * produced by `document.getElementById()`.
+ *
+ * @param {string} id HTML element ID from templates/index.html.
+ * @returns {HTMLElement|null}
+ */
 const $ = (id) => document.getElementById(id);
 
 const fields = {
@@ -56,8 +87,17 @@ let scanStartedAt = null;
 let renderedProgressCount = 0;
 let liveStateTimer = null;
 
+// ============================================================================
+// SCAN PROGRESS DISPLAY AND TIMERS
+// ============================================================================
+
 /**
- * resetScanProgressPanel. This helper is kept small so UI state changes remain traceable.
+ * Prepare the progress card for a brand-new scan.
+ *
+ * This function changes only browser elements: it reveals the panel, removes any
+ * previous failure styling, resets the elapsed time, clears old messages, and sets
+ * `renderedProgressCount` back to zero. It is called before the scan POST begins so
+ * messages from an earlier run cannot be mixed with the new run.
  */
 function resetScanProgressPanel() {
   const panel = $('scanProgressPanel');
@@ -69,9 +109,15 @@ function resetScanProgressPanel() {
 }
 
 /**
- * renderScanProgress. This helper is kept small so UI state changes remain traceable.
- * @param {*} data Value supplied by the caller.
- * @returns {*} Computed value or asynchronous result used by the interface.
+ * Draw one progress snapshot returned by `GET /api/scan-progress`.
+ *
+ * The server returns the complete message history on every poll. To avoid drawing
+ * duplicate rows, this function starts at `renderedProgressCount` and appends only
+ * messages the browser has not displayed yet. It also updates failure styling and
+ * the latest status message. When the local timer is inactive, it uses the elapsed
+ * value measured by Python.
+ *
+ * @param {Object} data Current progress state created by scan_status.py.
  */
 function renderScanProgress(data) {
   const panel = $('scanProgressPanel');
@@ -105,7 +151,14 @@ function renderScanProgress(data) {
 }
 
 /**
- * pollScanProgress. This helper is kept small so UI state changes remain traceable.
+ * Perform one scan-progress polling request.
+ *
+ * `requestJson()` fetches the latest server snapshot and `renderScanProgress()`
+ * paints it. A temporary polling failure is deliberately ignored because the main
+ * `/api/scan` request reports the actionable error; losing one progress refresh
+ * should not interrupt OCR that is already running on the server.
+ *
+ * @returns {Promise<void>}
  */
 async function pollScanProgress() {
   try {
@@ -116,7 +169,12 @@ async function pollScanProgress() {
 }
 
 /**
- * updateLocalScanElapsed. This helper is kept small so UI state changes remain traceable.
+ * Keep the visible scan timer moving smoothly between server responses.
+ *
+ * The elapsed time is always recalculated from `scanStartedAt`, rather than adding
+ * 0.1 seconds on every interval. Recalculating prevents timer drift when the browser
+ * is busy and an interval callback runs late. This timer is visual only; Python's
+ * performance timings remain the authoritative measurements.
  */
 function updateLocalScanElapsed() {
   if (scanStartedAt === null) return;
@@ -129,7 +187,11 @@ function updateLocalScanElapsed() {
 }
 
 /**
- * startScanProgressPolling. This helper is kept small so UI state changes remain traceable.
+ * Start the two browser timers used while a scan is active.
+ *
+ * One interval asks Flask for real progress every 300 ms. The second updates only
+ * the visible elapsed clock every 100 ms. Existing intervals are cleared first so
+ * clicking Scan again can never create multiple polling loops.
  */
 function startScanProgressPolling() {
   resetScanProgressPanel();
@@ -148,8 +210,15 @@ function startScanProgressPolling() {
 }
 
 /**
- * stopScanProgressPolling. This helper is kept small so UI state changes remain traceable.
- * @param {*} { failed Value supplied by the caller.
+ * Stop scan-progress timers and paint the final server snapshot.
+ *
+ * The last local elapsed value is displayed before `scanStartedAt` is cleared, then
+ * one final poll captures completion or failure messages produced near the end of
+ * the scan. The caller passes `failed: true` when the main scan request rejected.
+ *
+ * @param {Object} options Stop options.
+ * @param {boolean} [options.failed=false] Keep the panel styled as a failure.
+ * @returns {Promise<void>}
  */
 async function stopScanProgressPolling({ failed = false } = {}) {
   clearInterval(scanProgressTimer);
@@ -166,10 +235,21 @@ async function stopScanProgressPolling({ failed = false } = {}) {
   setTimeout(() => $('scanProgressPanel').classList.add('hidden'), failed ? 0 : 0);
 }
 
+// ============================================================================
+// SERVER-BACKED FOLDER PICKER
+// ============================================================================
+
 /**
- * openFolderBrowser. This helper is kept small so UI state changes remain traceable.
- * @param {*} targetFieldId Value supplied by the caller.
- * @param {*} startPath Value supplied by the caller.
+ * Open the app's folder picker for either the input or output folder field.
+ *
+ * Web pages cannot browse the Windows filesystem directly. This function records
+ * which field is being edited, hides the other picker, and asks `loadBrowseFolder()`
+ * to request a directory listing from Flask. The selected path is written back to
+ * the field identified by `targetFieldId`.
+ *
+ * @param {'inputFolder'|'outputFolder'} targetFieldId Field that will receive the path.
+ * @param {string} [startPath=''] Optional folder to display first.
+ * @returns {Promise<void>}
  */
 async function openFolderBrowser(targetFieldId, startPath = '') {
   const browser = folderBrowserElements[targetFieldId];
@@ -185,8 +265,12 @@ async function openFolderBrowser(targetFieldId, startPath = '') {
 }
 
 /**
- * closeFolderBrowser. This helper is kept small so UI state changes remain traceable.
- * @param {*} targetFieldId Value supplied by the caller.
+ * Close one folder-picker panel and clear its active target.
+ *
+ * Checking the target ID prevents the input-folder picker from accidentally clearing
+ * the output-folder selection context, or vice versa.
+ *
+ * @param {'inputFolder'|'outputFolder'} targetFieldId Picker to close.
  */
 function closeFolderBrowser(targetFieldId) {
   const browser = folderBrowserElements[targetFieldId];
@@ -195,9 +279,17 @@ function closeFolderBrowser(targetFieldId) {
 }
 
 /**
- * loadBrowseFolder. This helper is kept small so UI state changes remain traceable.
- * @param {*} path Value supplied by the caller.
- * @param {*} targetFieldId Value supplied by the caller.
+ * Display one level of the server's filesystem in the custom folder picker.
+ *
+ * The function requests `/api/browse-folders`, clears the old buttons, adds a `..`
+ * button for the parent, and creates one button for every child directory. Clicking
+ * a directory calls this function again, which is how the reviewer moves through
+ * the tree. Clicking “Use this folder” writes the current path into the target form
+ * field and immediately persists an output-folder change for an active review batch.
+ *
+ * @param {string} path Directory path Flask should list.
+ * @param {'inputFolder'|'outputFolder'|null} [targetFieldId=browseTargetField]
+ * @returns {Promise<void>}
  */
 async function loadBrowseFolder(path, targetFieldId = browseTargetField) {
   const browser = folderBrowserElements[targetFieldId];
@@ -240,10 +332,19 @@ async function loadBrowseFolder(path, targetFieldId = browseTargetField) {
   };
 }
 
+// ============================================================================
+// USER FEEDBACK AND HTTP COMMUNICATION
+// ============================================================================
+
 /**
- * showToast. This helper is kept small so UI state changes remain traceable.
- * @param {*} message Value supplied by the caller.
- * @param {*} isError Value supplied by the caller.
+ * Show a temporary success or error message without interrupting the workflow.
+ *
+ * All actions reuse one toast element, so frequent autosaves do not leave a stack
+ * of old notifications. Assigning the class also removes the previous `hidden`
+ * class; a timeout hides the message after 3.8 seconds.
+ *
+ * @param {string} message Text the reviewer should see.
+ * @param {boolean} [isError=false] Apply error styling when true.
  */
 function showToast(message, isError = false) {
   const toast = $('toast');
@@ -253,16 +354,19 @@ function showToast(message, isError = false) {
 }
 
 
-/**The requestJson() function returns the current state data takes in a url and 
-using the fetch() function processes the returned data from the given url. This 
-function makes a GET /api/state request to the Flask object which then calls the 
-api_state() function in app.py to return a Response object as a json file 
-holding the current settings and document metadata. */
 /**
- * requestJson. This helper is kept small so UI state changes remain traceable.
- * @param {*} url Value supplied by the caller.
- * @param {*} options Value supplied by the caller.
- * @returns {*} Computed value or asynchronous result used by the interface.
+ * Send an API request using the response and error rules shared by the whole page.
+ *
+ * This is the front end's single networking gateway. It applies the JSON content
+ * type, lets the caller override options such as method/body, reads the response as
+ * text, and delegates decoding to `parseJsonResponse()`. Non-success HTTP statuses
+ * become normal JavaScript `Error` objects, allowing every caller to use the same
+ * try/catch and toast pattern.
+ *
+ * @param {string} url Flask route to request.
+ * @param {RequestInit} [options={}] Fetch options such as method and body.
+ * @returns {Promise<Object>} Decoded response, or an empty object for an empty body.
+ * @throws {Error} When the server reports failure or returns unreadable data.
  */
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -280,15 +384,18 @@ async function requestJson(url, options = {}) {
   return data || {};
 }
 
-/**The parseJSONResponse() function returns an object holding the information from
-the bodytext parameter. The function first checks that bodytext is valid and 
-then trys to parse it as a JSON using the JSON.parse() function. If successful 
-the object returned by the parse() function is returned otherwise an error is 
-thrown.*/
 /**
- * parseJsonResponse. This helper is kept small so UI state changes remain traceable.
- * @param {*} bodyText Value supplied by the caller.
- * @param {*} response Value supplied by the caller.
+ * Decode a Flask response body and preserve useful errors when it is not JSON.
+ *
+ * Successful API routes normally return JSON. Flask or a proxy may instead return
+ * an HTML error page. If JSON parsing fails, HTML tags and repeated whitespace are
+ * removed so the reviewer sees a readable server message instead of `Unexpected
+ * token <`.
+ *
+ * @param {string} bodyText Raw response body read by `requestJson()`.
+ * @param {Response} response Fetch response, used for status fallback text.
+ * @returns {Object|null} Parsed JSON, or null for an empty response.
+ * @throws {Error} When a nonempty body cannot be parsed as JSON.
  */
 function parseJsonResponse(bodyText, response) {
   if (!bodyText) return null;
@@ -301,46 +408,59 @@ function parseJsonResponse(bodyText, response) {
   }
 }
 
-/**The statusLabel() function returns a beautified version of the current status
-label stored in the status field in the document parameter.*/
+/**
+ * Translate a saved document status into the label shown in the queue and review pane.
+ *
+ * Python stores machine-friendly values such as `needs_review` and `lookup_only`.
+ * Keeping the display translation here lets the API retain stable values while the
+ * interface uses spacing and capitalization that make sense to a person.
+ *
+ * @param {Object} document Review record returned by Flask.
+ * @returns {string} Human-readable status label.
+ */
 function statusLabel(document) {
   const labels = { filed: 'Filed', ready: 'Ready', needs_review: 'Needs review', lookup_only: 'Lookup only' };
   return labels[document.status] || 'Needs review';
 }
 
-/**The selectedDocument() function returns the document in the documents property
-in the state object that has the same id as the id stored in the selectedId 
-property in the state object. It uses the find() function which returns the 
-first value in an array for which the predicate is true.*/
 /**
- * selectedDocument. This helper is kept small so UI state changes remain traceable.
+ * Return the full review record represented by `state.selectedId`.
+ *
+ * The queue stores only an ID as the current selection because document objects are
+ * replaced after saves and polling. Looking up the object each time avoids holding a
+ * stale reference after the server sends a newer version of that record.
+ *
+ * @returns {Object|undefined} Selected document, or undefined when none is available.
  */
 function selectedDocument() {
   return state.documents.find((document) => document.id === state.selectedId);
 }
 
 /**
- * replaceDocument. This helper is kept small so UI state changes remain traceable.
- * @param {*} updatedDocument Value supplied by the caller.
+ * Replace one updated record inside the browser's local queue.
+ *
+ * A single-document PATCH may return only the changed document rather than the full
+ * application state. This function finds that record by stable ID and replaces it in
+ * place, preserving queue order and the current selection.
+ *
+ * @param {Object} updatedDocument Authoritative record returned by Flask.
  */
 function replaceDocument(updatedDocument) {
   const index = state.documents.findIndex((document) => document.id === updatedDocument.id);
   if (index >= 0) state.documents[index] = updatedDocument;
 }
 
-/**The setButtonLoading() function controls the appearance and function of the
- * Scan PDF's and File Batch buttons. When the second parameter is set to True 
- * it prevents the user from clicking the button. Also based on the second 
- * parameter the button either displays the loading text meaning the process 
- * initiated by the button is currently happening or the ready text meaning the 
- * process has either not been started or it's finished. 
-*/
 /**
- * setButtonLoading. This helper is kept small so UI state changes remain traceable.
- * @param {*} button Value supplied by the caller.
- * @param {*} isLoading Value supplied by the caller.
- * @param {*} loadingText Value supplied by the caller.
- * @param {*} readyText Value supplied by the caller.
+ * Prevent duplicate submissions while an asynchronous action is running.
+ *
+ * Scan and batch-filing operations can take long enough for a user to click twice.
+ * Disabling the button protects the server from duplicate work, while swapping the
+ * label explains what is happening. Callers restore the ready state in `finally`.
+ *
+ * @param {HTMLButtonElement} button Button being controlled.
+ * @param {boolean} isLoading Whether its action is currently running.
+ * @param {string} loadingText Label shown while disabled.
+ * @param {string} readyText Label shown when enabled.
  */
 function setButtonLoading(button, isLoading, loadingText, readyText) {
   button.disabled = isLoading;
@@ -361,11 +481,20 @@ const REQUIRED_METADATA_FIELDS = [
   { key: 'tax_id', label: 'Tax ID' },
 ];
 
+// ============================================================================
+// CENTRALIZED REVIEW VALIDATION
+// ============================================================================
+
 /**
- * isMissingMetadataValue. This helper is kept small so UI state changes remain traceable.
- * @param {*} key Value supplied by the caller.
- * @param {*} value Value supplied by the caller.
- * @returns {*} Computed value or asynchronous result used by the interface.
+ * Decide whether a metadata value should count as missing in the review interface.
+ *
+ * OCR and Python use placeholders such as `Unknown Lot`, `Project`, and `Document`.
+ * A nonempty placeholder is still unusable for filing, so this function mirrors the
+ * server's rules before highlighting fields or enabling workflow decisions.
+ *
+ * @param {string} key Metadata field name.
+ * @param {*} value Value currently stored for that field.
+ * @returns {boolean} True when the reviewer still needs to supply a real value.
  */
 function isMissingMetadataValue(key, value) {
   const normalized = String(value ?? '').trim();
@@ -379,9 +508,14 @@ function isMissingMetadataValue(key, value) {
 }
 
 /**
- * normalizeIssueMessages. This helper is kept small so UI state changes remain traceable.
- * @param {*} value Value supplied by the caller.
- * @returns {*} Computed value or asynchronous result used by the interface.
+ * Convert several server warning/error formats into one clean string array.
+ *
+ * Older and newer records may store an issue as one string, an array of strings, or
+ * an object with `message`, `error`, or `detail`. Normalizing at this boundary keeps
+ * the validation and rendering code simple and backward-compatible with saved state.
+ *
+ * @param {*} value Warning or error value from a document record.
+ * @returns {string[]} Nonempty messages ready to display.
  */
 function normalizeIssueMessages(value) {
   if (!value) return [];
@@ -400,17 +534,31 @@ function normalizeIssueMessages(value) {
 }
 
 /**
- * documentTypeValue. This helper is kept small so UI state changes remain traceable.
- * @param {*} document Value supplied by the caller.
+ * Safely read and trim one document's classified or reviewer-selected type.
+ *
+ * Centralizing this small lookup ensures duplicate detection treats missing metadata
+ * objects and extra whitespace the same way everywhere.
+ *
+ * @param {Object} document Review record.
+ * @returns {string} Trimmed document type, or an empty string.
  */
 function documentTypeValue(document) {
   return String(document?.metadata?.document_type || '').trim();
 }
 
 /**
- * buildValidationContext. This helper is kept small so UI state changes remain traceable.
- * @param {*} documents Value supplied by the caller.
- * @returns {*} Computed value or asynchronous result used by the interface.
+ * Precompute batch-wide facts needed to validate every queue item consistently.
+ *
+ * In Batch mode, two permanent drawings with the same document type are suspicious,
+ * so documents are grouped by a case-insensitive type and duplicate IDs are recorded.
+ * Lookup-only SDAT sheets are excluded. Mass mode intentionally skips this rule because
+ * each PDF is an independent job and repeated types are expected.
+ *
+ * Computing these groups once per render avoids repeating the same whole-queue scan for
+ * every individual document.
+ *
+ * @param {Object[]} [documents=state.documents] Queue to analyze.
+ * @returns {{duplicateIds:Set, duplicateTypesById:Map, scanMode:string}}
  */
 function buildValidationContext(documents = state.documents || []) {
   const duplicateIds = new Set();
@@ -443,6 +591,19 @@ function buildValidationContext(documents = state.documents || []) {
   return { duplicateIds, duplicateTypesById, scanMode };
 }
 
+/**
+ * Build the complete review-readiness result for one document.
+ *
+ * The function checks all required metadata, adds Batch-mode duplicate-type problems,
+ * normalizes warnings/errors supplied by Python, and converts failure statuses into an
+ * explicit error. Its returned field set drives red highlights, while the issue list
+ * drives queue tooltips and severity styling. Using one result prevents the queue and
+ * form from disagreeing about what needs attention.
+ *
+ * @param {Object} document Record being validated.
+ * @param {Object} [context=buildValidationContext()] Precomputed batch facts.
+ * @returns {Object} Missing fields, issues, severity, and convenience flags.
+ */
 function getDocumentValidationState(document, context = buildValidationContext()) {
   const metadata = document?.metadata || {};
   const missingFields = REQUIRED_METADATA_FIELDS.filter(({ key }) =>
@@ -488,8 +649,14 @@ function getDocumentValidationState(document, context = buildValidationContext()
 }
 
 /**
- * suggestedDocumentLabel. This helper is kept small so UI state changes remain traceable.
- * @param {*} item Value supplied by the caller.
+ * Create the short label used for a document button in the review queue.
+ *
+ * The label combines document type and lot because those are the quickest way to tell
+ * related engineering drawings apart. Missing placeholders are converted to explicit
+ * `Unknown` text instead of being shown as if they were valid metadata.
+ *
+ * @param {Object} item Review record.
+ * @returns {string} Queue label such as `Site Plan - Lot 104`.
  */
 function suggestedDocumentLabel(item) {
   const rawType = String(item.metadata?.document_type || '').trim();
@@ -499,9 +666,20 @@ function suggestedDocumentLabel(item) {
   return `${type} - ${lot}`;
 }
 
+// ============================================================================
+// DOCUMENT QUEUE, PDF VIEWER, AND REVIEW FORM RENDERING
+// ============================================================================
+
 /**
- * renderList. This helper is kept small so UI state changes remain traceable.
- * @returns {*} Computed value or asynchronous result used by the interface.
+ * Rebuild the left-hand document queue from the current browser state.
+ *
+ * For each record, this function calculates validation, creates a button, marks the
+ * active selection, and attaches a click handler that calls `selectDocument()`. When
+ * no records remain, it switches to the empty-state screen and loads the application's
+ * missing-PDF placeholder into the viewer.
+ *
+ * Rebuilding is simpler and safer than trying to patch many individual DOM rows after
+ * scans, saves, and filing actions that may all change the queue.
  */
 function renderList() {
   const list = $('documentList');
@@ -533,22 +711,15 @@ function renderList() {
   }
 }
 
-/**The renderSelectedDocument() function makes the document and review pane for 
-that document given by the document parameter, visible to the user. It begins by
-adding the hidden class to the emptyState <div> to hide it and doing the 
-opposite to the reviewPane <div> to reveal it. The <iframe> element with 
-id=pdfFrame is then changed which tells the browser to make a GET request to the
-given url. This url corresponds to a decorator in app.py for the document_pdf()
-fucntion which returns a response object with the requested document in pdf 
-form. The <iframe> element displays that given pdf. The documentTitle <div> is
-updated with the source_name field in the document parameter. The documentStatus
-<div> is updated with the statusLabel() function with a nice version of the 
-documents current status. Each field is updated with the document parameter's
-metadata.*/
 /**
- * renderMissingMetadataHighlights. This helper is kept small so UI state changes remain traceable.
- * @param {*} document Value supplied by the caller.
- * @returns {*} Computed value or asynchronous result used by the interface.
+ * Highlight exactly which controls need reviewer attention for the selected PDF.
+ *
+ * Metadata names used by Python (`tax_map`) are mapped to HTML element IDs (`taxMap`).
+ * The surrounding label/card receives a CSS class and the control receives an
+ * `aria-invalid` value, so the same problem is visible to both sighted users and
+ * assistive technology.
+ *
+ * @param {Object} document Selected review record.
  */
 function renderMissingMetadataHighlights(document) {
   const validation = getDocumentValidationState(document, buildValidationContext());
@@ -569,9 +740,15 @@ function renderMissingMetadataHighlights(document) {
 }
 
 /**
- * renderSelectedDocument. This helper is kept small so UI state changes remain traceable.
- * @param {*} document Value supplied by the caller.
- * @returns {*} Computed value or asynchronous result used by the interface.
+ * Populate the PDF viewer and review form for one selected record.
+ *
+ * The viewer URL points to `document_pdf()` in app.py. Its `src` is changed only when
+ * the document ID changes; otherwise Mass Scan polling would repeatedly reload the
+ * PDF and reset the reviewer's page and zoom. Metadata fields, custom document-type
+ * controls, missing-field highlights, and filing restrictions are then synchronized
+ * with the selected record.
+ *
+ * @param {Object} document Record returned by `selectedDocument()`.
  */
 function renderSelectedDocument(document) {
   $('emptyState').classList.add('hidden');
@@ -616,18 +793,14 @@ function renderSelectedDocument(document) {
     : '';
 }
 
-/**The selectDocument() function updates the current selected document, displays 
-the document, and displays the review panel for the document. First the current
-state has its selected id updated to the id parameter. Then the document 
-variable is set to the return of selectedDocument() which returns the 
-information for the document in the state object with the same id as the 
-selectedId. renderList() updates the button for the selected document to have 
-the active class which changes its appearance so you can tell which document is
-selected. renderSelectedDocument() displays the document as a pdf and the review 
-panel for editing the document information.*/
 /**
- * selectDocument. This helper is kept small so UI state changes remain traceable.
- * @param {*} id Value supplied by the caller.
+ * Make one queue record active and redraw both master and detail views.
+ *
+ * Saving only the ID in state allows later API responses to replace the underlying
+ * object. `renderList()` updates active-button styling, and
+ * `renderSelectedDocument()` fills the form and viewer from the newest record.
+ *
+ * @param {string} id Stable document ID assigned by app.py.
  */
 function selectDocument(id) {
   state.selectedId = id;
@@ -636,24 +809,18 @@ function selectDocument(id) {
   if (document) renderSelectedDocument(document);
 }
 
-/**The applyState() function updates the state and HTML fields from the data 
- * parameter, then adds button to access the current documents and show the 
- * current selected document, adds a red banner at the top of the screen to 
- * display any problems within the batch, and display the selected document in
- * pdf form and the review panel to edit document metadata. It does this by 
- * taking in the data parameter and updating the state.document and 
- * state.settings properties to be the same as data.documents and data.settings
- * respectively. Then each field is updated from the state properties these 
- * include input_folder and dpi. Once all of those are updated the warnings are
- * shown by renderBatchWarnings(). If state.selectedId isn't null 
- * selectDocument() adds button to access all of the documents in the document 
- * property, displays the document as a pdf and shows the review panel. 
- * Otherwise page is rendered with no documents.
-*/
 /**
- * applyState. This helper is kept small so UI state changes remain traceable.
- * @param {*} data Value supplied by the caller.
- * @param {*} options Value supplied by the caller.
+ * Make a complete Flask state response the browser's new source of truth.
+ *
+ * Settings are copied into scan controls, documents replace the local queue, and an
+ * invalid selection falls back to the first remaining record. Normal calls redraw the
+ * selected PDF and form. During live Mass Scan polling, `preserveReview` redraws only
+ * the queue so a background refresh cannot overwrite text the reviewer is currently
+ * typing into the form.
+ *
+ * @param {Object} data State object returned by `/api/state`, `/api/scan`, or filing.
+ * @param {Object} [options={}] Rendering options.
+ * @param {boolean} [options.preserveReview=false] Do not overwrite the active form.
  */
 function applyState(data, options = {}) {
   state.documents = data.documents || [];
@@ -689,8 +856,19 @@ function applyState(data, options = {}) {
     renderList();
 }
 
+// ============================================================================
+// REQUEST PAYLOADS AND SERVER-SYNCHRONIZED WORKFLOWS
+// ============================================================================
+
 /**
- * saveOutputFolder. This helper is kept small so UI state changes remain traceable.
+ * Persist a changed output folder without resubmitting all scan settings.
+ *
+ * The dedicated PATCH route updates saved settings and any current batch records that
+ * depend on the output root. The normalized path returned by Python is written back to
+ * both local state and the form, which is important on Windows where path resolution
+ * may change the typed representation.
+ *
+ * @returns {Promise<string>} Absolute output folder accepted by the server.
  */
 async function saveOutputFolder() {
   const data = await requestJson('/api/settings/output-folder', {
@@ -702,13 +880,14 @@ async function saveOutputFolder() {
   return data.output_folder;
 }
 
-/**The scanPayload() function returns a javascript object containing the 
- * settings relevant to the scanning process which are input folder, 
- * ouput folder, config path, project code, dpi, and ocr device. These are taken
- * from the current html fields for each.
-*/
 /**
- * scanPayload. This helper is kept small so UI state changes remain traceable.
+ * Read the scan form and build the request shape expected by `scan_settings()` in app.py.
+ *
+ * DOM values are strings by default, so DPI is converted to a number and checkboxes to
+ * booleans. Defaults protect older pages or missing optional controls. This function
+ * gathers data only; validation and filesystem checks remain on the server.
+ *
+ * @returns {Object} JSON-serializable scan settings.
  */
 function scanPayload() {
   return {
@@ -725,10 +904,17 @@ function scanPayload() {
 }
 
 /**
- * updatePayload. This helper is kept small so UI state changes remain traceable.
- * @param {*} autoFolder Value supplied by the caller.
- * @param {*} autoFileName Value supplied by the caller.
- * @param {*} changedField Value supplied by the caller.
+ * Build the PATCH body for edits to the currently selected document.
+ *
+ * It gathers visible metadata, resolves the custom document-type option, preserves any
+ * manually edited folder/file name, and tells Python whether those names should be
+ * regenerated. `changedField` is especially important: app.py uses it to decide when a
+ * Tax ID or address change should trigger a fresh SDAT lookup and Batch synchronization.
+ *
+ * @param {boolean} [autoFolder=false] Regenerate the suggested destination folder.
+ * @param {boolean} [autoFileName=false] Regenerate the suggested PDF name.
+ * @param {string} [changedField=''] Metadata key that initiated autosave.
+ * @returns {Object} JSON-serializable document update.
  */
 function updatePayload(autoFolder = false, autoFileName = false, changedField = '') {
   return {
@@ -752,24 +938,29 @@ function updatePayload(autoFolder = false, autoFileName = false, changedField = 
   };
 }
 
-/**The loadState() function updates the current appearance and state of the app.
- * First it calls requestJson() with the /api/state url which tells the browser 
- * to make a GET request to Flask. The matching decorator in app.py calls the 
- * api_state() function to return a Response object containing json with the 
- * information about the current state from the documents.json file. Once 
- * requestJson gives its output it is passed into applyState() which takes the 
- * json as its data parameter and updates all of the current html fields and the
- * state in app.js along with adding the visual changes of the document buttons,
- * warning banner, document pdf, and review panel.
-*/
 /**
- * loadState. This helper is kept small so UI state changes remain traceable.
+ * Restore saved settings and pending review records when the page first opens.
+ *
+ * `/api/state` reads `.review_state/documents.json` through state_store.py. Passing the
+ * response to `applyState()` reconstructs the queue, scan controls, selected PDF, and
+ * metadata form after a browser refresh or application restart.
+ *
+ * @returns {Promise<void>}
  */
 async function loadState() {
   applyState(await requestJson('/api/state'));
 }
 
-/**The scan() function */
+/**
+ * Publish completed Mass Scan documents to the queue while OCR continues.
+ *
+ * Mass mode appends each finished PDF to server state independently. This polling tick
+ * reloads that state with `preserveReview: true`, allowing the reviewer to begin work
+ * without waiting for the whole folder. A toast appears only when the queue grows.
+ * Temporary read failures are ignored because the main scan request owns error reporting.
+ *
+ * @returns {Promise<void>}
+ */
 async function pollLiveScanState() {
   try {
     const data = await requestJson('/api/state');
@@ -785,7 +976,10 @@ async function pollLiveScanState() {
 }
 
 /**
- * startLiveStatePolling. This helper is kept small so UI state changes remain traceable.
+ * Start the Mass Scan queue-refresh loop.
+ *
+ * An immediate poll avoids waiting for the first interval, then Flask state is checked
+ * every 500 ms. Clearing an existing interval first guarantees only one loop is active.
  */
 function startLiveStatePolling() {
   clearInterval(liveStateTimer);
@@ -794,7 +988,10 @@ function startLiveStatePolling() {
 }
 
 /**
- * stopLiveStatePolling. This helper is kept small so UI state changes remain traceable.
+ * Stop publishing incremental Mass Scan state after the scan finishes or fails.
+ *
+ * Clearing the saved handle is important because an orphaned interval would keep
+ * requesting `/api/state` and could unexpectedly redraw the queue during later work.
  */
 function stopLiveStatePolling() {
   clearInterval(liveStateTimer);
@@ -802,7 +999,14 @@ function stopLiveStatePolling() {
 }
 
 /**
- * scan. This helper is kept small so UI state changes remain traceable.
+ * Run the complete browser side of the Scan PDFs button workflow.
+ *
+ * The function gathers settings, locks the button, starts progress polling, and starts
+ * live queue polling only for Mass mode. It then POSTs to `/api/scan`; the returned state
+ * becomes the new review queue. `finally` always stops timers and restores the button,
+ * even when OCR or validation fails, so the interface cannot remain permanently busy.
+ *
+ * @returns {Promise<void>}
  */
 async function scan() {
   const button = $('scanButton');
@@ -831,10 +1035,17 @@ async function scan() {
 }
 
 /**
- * saveCurrent. This helper is kept small so UI state changes remain traceable.
- * @param {*} autoFolder Value supplied by the caller.
- * @param {*} autoFileName Value supplied by the caller.
- * @param {*} changedField Value supplied by the caller.
+ * Save the review form for the selected document and apply the authoritative response.
+ *
+ * The PATCH request is handled by `api_update_document()` in app.py, where metadata may
+ * be revalidated, SDAT-refreshed, and synchronized across a Batch. A Batch-wide edit can
+ * return a complete state object; an isolated edit may return one document. This function
+ * supports both response shapes and returns the newest selected record to its caller.
+ *
+ * @param {boolean} [autoFolder=false] Ask Python to rebuild the destination folder.
+ * @param {boolean} [autoFileName=false] Ask Python to rebuild the PDF name.
+ * @param {string} [changedField=''] Field responsible for the save.
+ * @returns {Promise<Object|null>} Updated selected record, or null with no selection.
  */
 async function saveCurrent(autoFolder = false, autoFileName = false, changedField = '') {
   const document = selectedDocument();
@@ -856,7 +1067,14 @@ async function saveCurrent(autoFolder = false, autoFileName = false, changedFiel
 }
 
 /**
- * fileCurrent. This helper is kept small so UI state changes remain traceable.
+ * Save and file the currently selected permanent PDF.
+ *
+ * Saving first ensures the server receives the latest form values. The filing request
+ * then supplies output/copy/text/in-place options to `file_document_to_output()`. Flask
+ * returns a queue with the completed record removed; `applyState()` selects the next
+ * available PDF. Lookup-only helper documents are blocked earlier by the disabled button.
+ *
+ * @returns {Promise<void>}
  */
 async function fileCurrent() {
   const document = await saveCurrent(false, false);
@@ -886,7 +1104,14 @@ async function fileCurrent() {
 }
 
 /**
- * fileAll. This helper is kept small so UI state changes remain traceable.
+ * Ask Flask to file every eligible record in the active review batch.
+ *
+ * The button remains disabled while app.py validates the packet, writes PDF metadata,
+ * moves or copies files, records tracker information, and removes completed state. The
+ * interface is updated only from the server response, and `finally` restores the control
+ * even if one document causes the batch operation to fail.
+ *
+ * @returns {Promise<void>}
  */
 async function fileAll() {
   const button = $('fileAllButton');
@@ -914,9 +1139,19 @@ async function fileAll() {
   }
 }
 
+// ============================================================================
+// FORM AUTOSAVE AND MODE-SPECIFIC CONTROLS
+// ============================================================================
+
 /**
- * metadataFieldName. This helper is kept small so UI state changes remain traceable.
- * @param {*} id Value supplied by the caller.
+ * Translate HTML control IDs into the snake_case metadata keys used by Python.
+ *
+ * Most IDs already match their API keys, but names such as `taxMap` and
+ * `editDocumentType` do not. Keeping this mapping in one place lets generic autosave
+ * code tell app.py exactly which property changed.
+ *
+ * @param {string} id HTML element ID.
+ * @returns {string} Metadata key expected in the PATCH payload.
  */
 function metadataFieldName(id) {
   const names = { taxMap: 'tax_map', taxId: 'tax_id', editProjectCode: 'project_code', editDocumentType: 'document_type' };
@@ -924,10 +1159,16 @@ function metadataFieldName(id) {
 }
 
 /**
- * registerAutoSave. This helper is kept small so UI state changes remain traceable.
- * @param {*} ids Value supplied by the caller.
- * @param {*} autoFolder Value supplied by the caller.
- * @param {*} autoFileName Value supplied by the caller.
+ * Attach the same metadata-save behavior to a group of form controls.
+ *
+ * On each `change` event, the listener converts the control ID to an API field name and
+ * calls `saveCurrent()` with the requested name-regeneration rules. Errors are routed to
+ * the shared toast. Registration removes repetitive event-handler code and keeps all
+ * property fields consistent.
+ *
+ * @param {string[]} ids Form control IDs to watch.
+ * @param {boolean} autoFolder Rebuild folder suggestions after these fields change.
+ * @param {boolean} autoFileName Rebuild filename suggestions after these fields change.
  */
 function registerAutoSave(ids, autoFolder, autoFileName) {
   ids.forEach((id) => {
@@ -942,6 +1183,14 @@ function registerAutoSave(ids, autoFolder, autoFileName) {
 
 registerAutoSave(['lot', 'address', 'taxMap', 'parcel', 'taxId', 'section', 'editProjectCode'], true, true);
 
+/**
+ * Switch the document-type editor between a configured type and free text.
+ *
+ * Selecting the special `__custom__` option reveals, enables, and requires the custom
+ * text input. Choosing a configured type hides and disables that input so stale custom
+ * text cannot accidentally be submitted. Focus is deferred to the next animation frame
+ * so it occurs after the control becomes visible.
+ */
 function updateCustomDocumentTypeInterface() {
   if (!fields.editDocumentType || !fields.customDocumentType) return;
 
@@ -980,6 +1229,13 @@ if (fields.customDocumentType) {
 }
 
 
+/**
+ * Reconfigure filing controls when In-Place mode is selected.
+ *
+ * In-Place mode writes metadata back to each original PDF, so an output folder and copy
+ * option no longer apply. Those controls are disabled and any open output-folder picker
+ * is closed. Turning the mode off restores normal destination-tree filing controls.
+ */
 function updateInPlaceInterface() {
   const enabled = Boolean(fields.inPlace?.checked);
   fields.outputFolder.disabled = enabled;
@@ -1000,19 +1256,15 @@ fields.outputFolder.addEventListener('change', () => {
 
 if (fields.inPlace) fields.inPlace.addEventListener('change', updateInPlaceInterface);
 
-/*Calls the scan() function whenever the Scan PDF's button is clicked.*/
+// These listeners are the three main entry points initiated by button clicks.
+// Each named function owns its complete async workflow and error handling.
 $('scanButton').addEventListener('click', scan);
-
-/*Calls the fileCurrent() function whenever the File PDF button is clicked.*/
 $('fileButton').addEventListener('click', fileCurrent);
-
-/*Calls the fileAll() function whenever the File Batch button is clicked.*/
 $('fileAllButton').addEventListener('click', fileAll);
 
 
-/*This is called the first time the app is opened by the user to update the 
-visuals and settings. 
-*/
+// Initial page startup: reconstruct the interface from the server's saved state.
+// A startup failure uses the same visible error channel as later API actions.
 loadState().catch((error) => showToast(error.message, true));
 
 

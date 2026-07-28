@@ -1,10 +1,18 @@
-"""Document-domain operations used after OCR. The functions in this module merge metadata, synchronize batch fields, perform SDAT-assisted updates, create suggested filenames, and apply user edits without coupling those operations to Flask routes.
+"""Business rules for review records after OCR has finished.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+A "document" in this module is a dictionary stored in the review-state
+JSON file. It contains the source PDF path, OCR text, extracted metadata,
+suggested names, review status, and eventual filed path. The functions
+here keep that record internally consistent when metadata changes.
+
+This module is responsible for three app-level jobs:
+    1. Build suggested folder and file names from metadata.
+    2. Apply browser edits and optionally re-check property data in SDAT.
+    3. Write metadata into a PDF and move/copy it to its final location.
+
+Keeping these rules outside ``app.py`` is important. Flask routes remain
+small, while tests and other callers can use the same update and filing
+behavior without pretending to be a web request."""
 
 from __future__ import annotations
 
@@ -32,10 +40,12 @@ OPTIONAL_METADATA_FIELDS = ("tax_map", "parcel", "tax_id", "section")
 
 
 def is_unknown(value: str) -> bool:
-    """The is_unknown() function returns True if the value parameter is unknown
-    and False otherwise. It checks if it doesn't have a value at all first, then
-    if the value begins with the string unknown, and finally if the value is
-    Project or Document. If any of those are true it returns True."""
+    """Decide whether a metadata value is still a placeholder.
+    
+    The review interface uses labels such as ``Unknown Lot``, ``Project``, and
+    ``Document`` when extraction has no trustworthy answer. Treating those as
+    missing prevents a document from being marked ready merely because the
+    placeholder string is non-empty."""
     return (
         not value
         or value.lower().startswith("unknown")
@@ -44,12 +54,12 @@ def is_unknown(value: str) -> bool:
 
 
 def suggested_folder(metadata: dict[str, str]) -> str:
-    """The suggested_folder() function returns a string with a suggested folder name
-    based on the metadata parameter. The folder name follows the naming conventions
-    Lot # - Address(ex: Lot 1 - 34 Jibsail Street). After the lot and address
-    information are pulled from the metadata parameter they are passed into the
-    safe_path_part() function imported from pipeline.py to ensure they contain only
-    allowed characters and remove extra spaces."""
+    """Build the default property-folder name shown in the review form.
+    
+    The convention is ``Lot <lot> - <address>``. ``safe_path_part`` removes
+    characters Windows forbids in folder names and supplies a readable fallback
+    when OCR did not identify either value. This function suggests a name; it
+    does not create the directory."""
     return safe_path_part(
         f"Lot {metadata.get('lot', '')} - {metadata.get('address', '')}",
         "Unknown Lot - Unknown Address",
@@ -57,12 +67,12 @@ def suggested_folder(metadata: dict[str, str]) -> str:
 
 
 def suggested_filename(metadata: dict[str, str], source_name: str) -> str:
-    """The suggested_filename() function returns a string with a suggested file name
-    based on the metadata parameter. The file name follows the naming conventions
-    Document Type - Lot #(ex: Site Plan - Lot 1). After the lot and address
-    information are pulled from the metadata parameter they are passed into the
-    safe_path_part() function imported from pipeline.py to ensure they contain only
-    allowed characters and remove extra spaces."""
+    """Build the default PDF filename from document type and lot.
+    
+    A result such as ``Site Plan - Lot 104.pdf`` is easier to search and sort
+    than the scanner's original filename. If required metadata is unavailable,
+    the original source stem becomes the fallback. Path sanitization happens
+    before the ``.pdf`` suffix is restored."""
     stem = (
         f"{metadata.get('document_type', '')} - Lot {metadata.get('lot', '')}"
     )
@@ -70,11 +80,12 @@ def suggested_filename(metadata: dict[str, str], source_name: str) -> str:
 
 
 def document_status(metadata: dict[str, str]) -> str:
-    """The document_status() function returns either needs_review or ready based
-    on the metadata parameter. If any of the fields in REQUIRED_METADATA_FIELDS
-    are empty in the metadata parameter the function returns needs_review.
-    Otherwise ready is returned.
-    """
+    """Translate metadata completeness into the review status displayed by the UI.
+    
+    Lot, address, project code, and document type are required for normal
+    documents. If any one is blank or a placeholder, the result is
+    ``needs_review``; otherwise it is ``ready``. Optional SDAT fields do not
+    block filing."""
     return (
         "needs_review"
         if any(
@@ -90,11 +101,16 @@ def sync_document_metadata(
     auto_folder: bool = False,
     auto_file_name: bool = False,
 ) -> dict[str, Any]:
-    """The sync_document_metadata() function returns a document with updated
-    folder name, file name, and status. The metadata for the document is stored
-    in the metadata variable. If the auto_folder parameter is True or the
-    document parameter doesn't contain a folder_name key the document folder_name key is created or changed to match the output of the suggested_folder() function called on the metadata variable. The same is done for file name except it is based on the auto_file_name parameter the file_name key and the suggested_filename() function. The status key in document is set everytime using the document_status() function unless it is a lookup only document.
-    """
+    """Recalculate all values derived from a document's metadata.
+    
+    Browser edits and SDAT refreshes can change lot, address, or document type.
+    Those changes may make the old suggested folder, filename, or status stale.
+    This function updates the derived fields together so the record cannot show
+    a new lot with an old filename.
+    
+    ``auto_folder`` and ``auto_file_name`` control whether a user's manual name
+    is replaced. Lookup-only records receive a special status because they are
+    reference material rather than files to be permanently filed."""
     metadata = document.setdefault("metadata", {})
     source_name = str(document.get("source_name", "document.pdf"))
 
@@ -115,10 +131,11 @@ def sync_document_metadata(
 def find_document(
     state: dict[str, Any], document_id: str
 ) -> dict[str, Any] | None:
-    """The find_document() function returns the document in the state parameter
-    with id matching the document_id parameter or None if there aren't any
-    documents in the state parameter with an id that matches the document_id
-    parameter."""
+    """Locate one review record by its generated stable ID.
+    
+    Filenames and paths can change during review, so routes identify records
+    with a UUID stored in the ``id`` field. ``next(..., None)`` returns the first
+    match without raising an exception when the record has already been filed."""
     return next(
         (
             doc
@@ -130,14 +147,12 @@ def find_document(
 
 
 def metadata_from_dict(metadata: dict[str, Any]) -> ExtractedMetadata:
-    """Metadata from dict.
-
-    Args:
-        metadata: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Convert the JSON-style metadata stored in state into ``ExtractedMetadata``.
+    
+    SDAT helpers use an immutable dataclass, while the browser and state file use
+    dictionaries. This adapter fills visible defaults and copies every hidden
+    SDAT field so no property information is lost during a browser edit or
+    re-lookup."""
     return ExtractedMetadata(
         lot=str(metadata.get("lot", "Unknown Lot")),
         address=str(metadata.get("address", "Unknown Address")),
@@ -159,13 +174,21 @@ def refresh_property_fields_from_sdat(
     documents: list[dict[str, Any]],
     changed_field: str,
 ) -> dict[str, str] | None:
-    """Validate one property edit with SDAT and update the supplied documents.
-
-    The caller chooses the synchronization scope. Batch scanning passes every
-    permanent document because those files represent one property. Mass
-    scanning passes only the document being edited so separate jobs can never
-    overwrite one another.
-    """
+    """Revalidate edited property identifiers and synchronize authoritative fields.
+    
+    App role:
+        When a user changes Tax ID, address, map, parcel, or lot, the old SDAT
+        values may no longer describe the selected property. This function
+        performs a new lookup and updates the chosen document scope.
+    
+    How it chooses a lookup:
+        * Tax ID change -> direct district/account search.
+        * Address change -> address search.
+        * Other property field -> general SDAT search with the edited identifiers.
+    
+    Batch mode passes every permanent drawing because they share one property.
+    Mass mode passes only the edited PDF. Suggested names and status are rebuilt
+    after the authoritative values are copied into each target record."""
     documents = [doc for doc in documents if not doc.get("is_lookup_document")]
     if not documents:
         return None
@@ -178,6 +201,8 @@ def refresh_property_fields_from_sdat(
     county = str(config.get("default_county", "") or "")
     records: list[dict[str, Any]] = []
 
+    # Choose the lookup that best matches what the user corrected. Reusing an
+    # old address after a Tax ID edit, for example, could restore the wrong parcel.
     if changed_field == "tax_id":
         records = lookup_by_tax_id(seed.tax_id, county)
     elif changed_field == "address":
@@ -236,7 +261,11 @@ def refresh_property_fields_from_sdat(
 def refresh_batch_property_fields_from_sdat(
     state: dict[str, Any], changed_field: str
 ) -> dict[str, str] | None:
-    """Validate a property edit and synchronize all permanent batch files."""
+    """Apply the SDAT refresh workflow to all permanent documents in Batch mode.
+    
+    This small wrapper selects the batch-wide synchronization scope and delegates
+    the lookup logic to ``refresh_property_fields_from_sdat``. Keeping the wrapper
+    makes the caller's intent explicit and protects lookup-only helper records."""
     return refresh_property_fields_from_sdat(
         state,
         list(state.get("documents", [])),
@@ -247,23 +276,20 @@ def refresh_batch_property_fields_from_sdat(
 def apply_document_update(
     state: dict[str, Any], document: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """The ``apply_document_update()`` function updates the given document and
-    if batch mode is on the other documents in the current state, and returns
-    the given document. First the metadata for the current document and the
-    scanning mode are extracted. Then the fields from payload are extracted. If
-    mass mode is selected the single document's metadata field is updated via
-    the ``update()`` function with the fields from the payload. Then the folder
-    name, file name , and status are updated via ``sync_document_metadata()``.
-    If any of the changed fields in paylod match tax_map, parcel, tax_id, or
-    address the document is updated using data pulled from the SDAT. If
-    mass_mode just the document given by the parameter is updated via
-    ``refresh_property_fields_from_sdat()``. Otherwise the
-    whole batch of documents is updated by the SDAT via
-    ``refresh_batch_property_fields_from_sdat()``. Then document specific fields
-    are updated. Finally the documents folder name, file name, status are
-    updated once again with the ``sync_document_metadata()`` function and
-    returned.
-    """
+    """Apply browser edits while enforcing Batch-versus-Mass synchronization rules.
+    
+    The payload may change metadata, suggested names, or both. Shared property
+    fields are copied across all permanent documents only in Batch mode; document
+    type remains specific to the selected PDF. In Mass mode no neighboring record
+    is modified because each PDF can represent a different property.
+    
+    When a property identifier changes, the function asks SDAT to refresh related
+    fields. It then runs ``sync_document_metadata`` so status and automatic names
+    match the final values. The selected document is returned for an immediate UI
+    update, while the caller persists the whole state atomically."""
+    # The selected record is mutable because it belongs to the locked live
+    # state transaction. Batch peers may also be changed below when a shared
+    # property field is edited.
     metadata = document["metadata"]
     scan_mode = str(
         state.get("settings", {}).get("scan_mode", "batch")
@@ -341,48 +367,31 @@ def file_document_to_output(
     file_name: str | None = None,
     in_place: bool = False,
 ) -> dict[str, Any]:
-    """The file_document_to_output() function places the given document in the
-    given output_folder, writes standard and XMP metadata,
-    adds a text layer onto the pdf, and updates the document parameter and
-    returns it. The function begins by checking that the source PDF still
-    exists by checking that the source_path key in the document parameter is a
-    valid path. Then the function diverges into in-place saving and saving to
-    the given output.
-
-    In-place: Build the updated PDF beside the source, then atomically replace
-    the original. A metadata-writing failure therefore leaves the source file
-    untouched instead of partially rewriting it. A file with a unique name is
-    generated via the ``mkstemp()`` function. It is then promptly closed to
-    allow for editing of the document. All of the data from the original file is
-    copied into the temp file via the ``copy2`` function. The temp_file has the
-    text layer, windows metadata, and XMP metadata written onto it via
-    ``write_pdf_metadata()``. Then the newly updated temp file overwrites the
-    information in the original file. The temp file is removed via ``unlink()``
-    which leaves only the original file which has now been replaced with the
-    updated data. If the ``save_text`` parameter is true save the ocred text
-    from the document to a txt file. Updates the filed_path and status fields in
-    the current document. Finally it returns.
-
-    Output Folder: First the resolved folder is selected as either the
-    folder_name parameter, the folder_name field in the given document, or the
-    default unknown folder name. This is passed into ``safe_path_part()``. Next,
-    the file name is determined. The rsolved folder is combined with the ouput
-    folder parameter to create the path to the desired location for the files to
-    be placed. If the directory doesn't exist then one is created. The
-    destination path is created by combining the destiniation folder and the
-    file name and combining them into a path which is then checked for
-    uniqueness and corrected via ``unique_path``. If the copy_file parameter is
-    true the document is copied from the source to the destination path,
-    otherwise it is moved. The metadata for the document is updated with
-    ``write_pdf_metadata()``. If save_text the ocred text is saved. The document
-    parameter is updated with it's new folder name, file name, filed path, and
-    status and the document is returned.
-    """
+    """Finish one reviewed document: choose its destination, write metadata, and move it.
+    
+    Filing sequence:
+        1. Confirm the source PDF still exists.
+        2. Rebuild names from metadata unless the user supplied overrides.
+        3. Choose either the source folder (In-Place) or the configured property
+           subfolder under the output root.
+        4. Avoid overwriting an existing PDF by creating a numbered path.
+        5. Work on a temporary copy, write standard/XMP metadata, then atomically
+           place the completed file at its destination.
+        6. Copy or move the source according to the user's option and optionally
+           save the OCR text beside the PDF.
+    
+    The returned dictionary is the same review record with ``filed_path`` updated.
+    Temporary-file cleanup in ``finally`` prevents abandoned partial PDFs after an
+    exception."""
+    # Never begin naming or metadata work until the source is confirmed. A
+    # stale review record should fail clearly rather than create an empty file.
     source_path = Path(document["source_path"])
     if not source_path.exists():
         raise FileNotFoundError(f"Source PDF no longer exists: {source_path}")
 
     if in_place:
+        # Write metadata to a temporary sibling first. The final destination only
+        # appears after a complete PDF exists, avoiding half-written project files.
         temp_handle, temp_name = tempfile.mkstemp(
             prefix=f".{source_path.stem}_metadata_",
             suffix=source_path.suffix,

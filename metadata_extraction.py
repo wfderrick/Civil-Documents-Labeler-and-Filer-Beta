@@ -1,10 +1,20 @@
-"""Text-to-metadata extraction and document classification. This module converts OCR text into structured project, property, document-type, and title-block fields while preserving confidence and source information used by later review steps.
+"""Convert OCR text and OCR layout information into structured metadata.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+OCR returns mostly unstructured text. This module turns that text into
+values the application can use: document type, lot, address, project
+code, tax map, parcel, and Tax ID. It also contains the document-type
+classifier and the layout-aware address finder.
+
+The extraction sequence used by ``extract_metadata`` is:
+    1. Detect whether the PDF is an SDAT lookup printout.
+    2. Classify the engineering document type.
+    3. Extract identifiers with ordered regular expressions.
+    4. Reconstruct likely title-block address lines from OCR coordinates.
+    5. Sanitize values before they are used in Windows paths.
+
+``ExtractedMetadata`` is the common data object passed from this module
+into the batch pipeline, SDAT enrichment, review interface, and PDF
+metadata writer. Changes to its fields therefore affect several files."""
 
 from __future__ import annotations
 
@@ -146,18 +156,25 @@ OCR_NUMBER_MAP = str.maketrans(
 
 
 def normalize_ocr_numbers(text: str) -> str:
-    """Normalize OCR mistakes that commonly appear inside numeric identifiers."""
+    """Repair letter-shaped OCR errors before parsing numeric identifiers.
+    
+    Tax IDs and parcel numbers frequently contain ``O`` read for zero or ``I``
+    and ``l`` read for one. Translation is intentionally used only in numeric
+    extraction paths; applying it to all OCR text would damage ordinary words."""
     return str(text or "").translate(OCR_NUMBER_MAP)
 
 
 @dataclass(frozen=True)
 class ExtractedMetadata:
-    """Structured OCR and SDAT metadata carried through the scan pipeline.
-
-    The first eight fields are used by the review interface and output naming.
-    The remaining fields are SDAT-only property details that are retained in the
-    document record and written to XMP without adding controls to the UI.
-    """
+    """Immutable container for every value carried through the metadata pipeline.
+    
+    The first fields drive review, naming, and SDAT searches. The longer fields
+    mirror selected Maryland dataset columns and are written into XMP metadata
+    even though they are not individually editable in the browser.
+    
+    ``frozen=True`` prevents accidental in-place changes. Callers use
+    ``dataclasses.replace`` to create an updated copy, making it clearer which
+    stage supplied a new value."""
 
     lot: str
     address: str
@@ -189,7 +206,12 @@ class ExtractedMetadata:
 
 @dataclass(frozen=True)
 class FuzzyMatch:
-    """Represent FuzzyMatch behavior and related state."""
+    """Describe why the document-type classifier selected one label.
+    
+    Besides the winning label and similarity score, the object stores the text
+    window and keyword that produced the score. ``start`` is also used to begin
+    the lot search after the detected title, preserving the behavior of earlier
+    versions of the application."""
 
     label: str
     score: float
@@ -205,14 +227,15 @@ _CONFIG_CACHE: dict[tuple[str, int, int], Config] = {}
 
 
 def load_config(path: Path | None) -> Config:
-    """The load_config() function returns a dictionary with settings and regex
-    patterns which determine how the app functions. If the path parameter is
-    None the DEFAULT_CONFIG is returned. Otherwise the file pointed to by the
-    path parameter is opened and saved in config_file. config_file is then
-    loaded as a json to convert it into a python object which is saved into
-    user_config. Next, the default config is updated with the updated settings
-    from user_config, so settings are changed or added depending on whether they
-    already exist. Finally config is returned."""
+    """Build the effective configuration used by scanning and extraction.
+    
+    The built-in defaults guarantee every expected key exists. Non-empty values
+    from ``config.json`` then override those defaults. A cache key containing the
+    absolute path, modification time, and file size allows repeated scans to skip
+    JSON parsing while automatically invalidating the cache after an edit.
+    
+    A copy is returned so a caller can safely add request-specific values such as
+    the selected county without mutating the cached configuration."""
     config = dict(DEFAULT_CONFIG)
     if path is None:
         return config
@@ -239,22 +262,24 @@ def load_config(path: Path | None) -> Config:
 
 
 def normalize_value(value: str) -> str:
-    """The normalize_value() function returns a cleaned version of the value
-    parameter. To begin it calls the built in str() class on either value if it is
-    not None or an empty string to convert that result to a string. The split()
-    function is called on the result of that in order to separate the non whitespace
-    characters into groups and then rejoined using the join() function called on " "
-    so that each group in the list generated from split() is separated by a single
-    space in the singel string generated from the join() function.
-    Then strip() is called on the result of join() to remove any leading or
-    trailing spaces and/or bad characters like :, -, #, ., ,,and/or ;."""
+    """Clean one regex capture without changing its meaningful internal text.
+    
+    OCR often inserts repeated spaces or leaves labels surrounded by punctuation.
+    Splitting and rejoining collapses whitespace to single spaces; ``strip`` then
+    removes common separators from the ends. This normalization is used before
+    values are compared, displayed, or converted into path components."""
     return " ".join(str(value or "").split()).strip(" :-#.,;")
 
 
 def first_match(
     text: str, patterns: Iterable[str], *, normalize_numbers: bool = False
 ) -> str | None:
-    """Return the first regex capture, optionally fixing OCR digit/letter mistakes first."""
+    """Run ordered extraction patterns and return the first successful capture.
+    
+    Configuration order expresses priority: a specific title-block pattern can
+    appear before a broad fallback. Multi-group patterns are joined with a dash,
+    which is how district and account captures become one Tax ID. Optional number
+    normalization repairs OCR digit errors before matching."""
     search_text = (
         normalize_ocr_numbers(text) if normalize_numbers else str(text or "")
     )
@@ -280,7 +305,12 @@ def first_match(
 def all_matches(
     text: str, patterns: Iterable[str], *, normalize_numbers: bool = False
 ) -> list[str]:
-    """Return all regex captures, optionally fixing OCR digit/letter mistakes first."""
+    """Collect every captured value from every configured pattern.
+    
+    Address extraction needs more than the first regex hit because company contact
+    information may appear before the project address. This helper preserves pattern
+    and page-text order so the caller can reject bad candidates and accept the first
+    plausible one."""
     search_text = (
         normalize_ocr_numbers(text) if normalize_numbers else str(text or "")
     )
@@ -304,14 +334,12 @@ def all_matches(
 
 
 def safe_path_part(value: str, fallback: str) -> str:
-    """The safe_path_part() function returns a string which represents a file or
-    folder name which is allowed. To begin the normalize_value() function is called
-    to remove large groups of spaces and some invalid characters. Next sub() is
-    called to substitute more invalid characters out of the string. strip() is
-    called as a final check to remove any spaces or periods at the end of a folder
-    or file name since it's not allowed in Windows. Finally a truncated version of
-    the cleaned value string is returned or if its a None type the fallback
-    parameter is returned."""
+    """Make extracted text safe for use inside a Windows filename or folder name.
+    
+    The function normalizes spacing, removes reserved path characters and control
+    codes, removes trailing periods/spaces forbidden by Windows, and limits length
+    to avoid unwieldy paths. The fallback ensures callers never receive an empty
+    path component."""
     value = normalize_value(value) or fallback
     value = INVALID_PATH_RE.sub("", value)
     value = value.strip(" .")
@@ -319,13 +347,11 @@ def safe_path_part(value: str, fallback: str) -> str:
 
 
 def unique_path(path: Path) -> Path:
-    """The ``unique_path()`` function checks that the given path already exists.
-    If it doesn't the path is returned as is. If it does the function loops
-    through possible paths by adding a number in between the path stem and
-    suffix which loops from 2 to 9999 to attempt to create a unique path. Once a
-    unique path is found it is returned. If one if never found a
-    ``RuntimeError`` is thrown.
-    """
+    """Select a destination path without overwriting an existing file.
+    
+    The requested path is returned unchanged when free. Otherwise the function
+    tries ``name (2).pdf``, ``name (3).pdf``, and so on. Filing code calls this
+    before the final move so a previous project record is never silently replaced."""
     if not path.exists():
         return path
     for counter in range(2, 10000):
@@ -336,26 +362,21 @@ def unique_path(path: Path) -> Path:
 
 
 def normalize_for_fuzzy(value: str) -> str:
-    """Normalize for fuzzy.
-
-    Args:
-        value: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Create the comparison form used by OCR-tolerant document classification.
+    
+    Text is lowercased and common visual confusions are translated so, for example,
+    a zero in ``site plan`` is less damaging to similarity. This representation is
+    for matching only; the original OCR text remains available for display and
+    metadata extraction."""
     return str(value or "").lower().translate(OCR_CONFUSION_MAP)
 
 
 def keyword_groups(raw_keywords: Any) -> dict[str, list[str]]:
-    """Keyword groups.
-
-    Args:
-        raw_keywords: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Convert supported configuration styles into ``label -> list of phrases``.
+    
+    Modern configuration maps each document type to several OCR variants. Older
+    files may contain only a list of labels. Normalizing both shapes here lets the
+    classifier use one loop and keeps backward compatibility with earlier projects."""
     if isinstance(raw_keywords, Mapping):
         return {
             str(label): (
@@ -373,13 +394,15 @@ def keyword_groups(raw_keywords: Any) -> dict[str, list[str]]:
 def best_keyword_window(
     keyword: str, normalized_text: str
 ) -> tuple[float, int, int]:
-    """Return the best fuzzy keyword window while preserving legacy tie behavior.
-
-    Window lengths remain in ascending order and scores still use a strict ``>``
-    comparison. ``real_quick_ratio`` and ``quick_ratio`` are upper-bound pruning
-    checks, so skipping a window when either bound is less than or equal to the
-    current best cannot change the winning score or the first tie-winner.
-    """
+    """Find the OCR substring most similar to one document-type keyword.
+    
+    The function slides windows near the keyword's length across normalized OCR
+    text and scores each with ``SequenceMatcher``. Cheap upper-bound checks skip
+    windows that cannot beat the current best, which provides the Version 3 speedup.
+    
+    Window lengths remain ascending and the score comparison remains strictly ``>``.
+    Those details preserve the legacy first-winner behavior when two locations tie,
+    which matters because the winning start position influences the later lot search."""
     if not keyword or not normalized_text:
         return 0.0, -1, -1
     exact_start = normalized_text.find(keyword)
@@ -414,12 +437,13 @@ def best_keyword_window(
 
 
 def regex_document_type(text: str, rules: Any) -> FuzzyMatch | None:
-    """Return a normalized document type for an explicit regex rule match.
-
-    Site Plan takes precedence when the title contains both ``site plan`` and
-    ``easement plat``. Without this guard, the earlier Plat/Replat rule for an
-    easement plat can win before the Site Plan rule is evaluated.
-    """
+    """Apply high-confidence document-type rules before fuzzy matching.
+    
+    Some phrases must outrank broader keywords—for example, an easement plat may
+    contain words that resemble another plan type. The function checks configured
+    rules in insertion order and returns a perfect-score ``FuzzyMatch`` at the first
+    rule hit. Returning the match location keeps the downstream interface identical
+    to the fuzzy classifier."""
     if not isinstance(rules, Mapping):
         return None
 
@@ -457,23 +481,24 @@ def regex_document_type(text: str, rules: Any) -> FuzzyMatch | None:
 def fuzzy_document_type(
     text: str, keywords: Any, threshold: float = DOCUMENT_TYPE_THRESHOLD
 ) -> FuzzyMatch | None:
-    """Return the highest-scoring configured document type found in OCR text.
-
-    Each configured keyword is normalized and compared with the most similar
-    text window. The best match is returned only when its score meets
-    ``threshold``; otherwise the function returns ``None``.
-
-    Args:
-        text: OCR text to classify.
-        keywords: Document-type labels and their candidate phrases.
-        threshold: Minimum similarity score required to accept a match.
-
-    Returns:
-        The strongest accepted match, or ``None`` when no candidate is reliable.
-    """
+    """Classify a document from configured title phrases while avoiding unnecessary work.
+    
+    Classification occurs in two stages. First, every normalized phrase is searched
+    as an exact substring; most clear title blocks finish here in milliseconds. Only
+    when no exact phrase exists does the function call ``best_keyword_window`` for
+    OCR-tolerant similarity scoring.
+    
+    The highest score above the threshold wins. Configuration order and strict score
+    comparisons preserve previous tie behavior, so the optimization changes speed
+    without intentionally changing classifications."""
+    # Build the comparison text once. Repeating lowercase/translation inside
+    # every keyword loop was unnecessary work in earlier versions.
     normalized_text = normalize_for_fuzzy(text)
     groups = keyword_groups(keywords)
 
+    # FAST PATH - Most title blocks contain at least one configured phrase
+    # exactly after OCR normalization. Returning here avoids thousands of
+    # SequenceMatcher window comparisons on ordinary documents.
     # Fast path: preserve the legacy winner exactly when a configured keyword
     # occurs verbatim after OCR normalization. The legacy loop uses a strict
     # ``>`` comparison, so the first exact match (score 1.0) can never be
@@ -523,15 +548,12 @@ def fuzzy_document_type(
 
 
 def is_ignored_address(address: str, config: Config) -> bool:
-    """Is ignored address.
-
-    Args:
-        address: Input used by this operation.
-        config: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Reject a regex address candidate that is probably not the project property.
+    
+    Engineering sheets often print the surveyor's office address, phone number, URL,
+    or email in the title block. The function compares normalized candidates against
+    explicitly ignored addresses and configured warning keywords so those contacts do
+    not become the destination folder name."""
     cleaned = normalize_for_fuzzy(address)
     compact = re.sub(r"[^a-z0-9]", "", cleaned)
     for blocked in config.get("ignored_addresses", []):
@@ -551,7 +573,11 @@ def is_ignored_address(address: str, config: Config) -> bool:
 def _ocr_item_rect(
     item: Mapping[str, Any],
 ) -> tuple[float, float, float, float] | None:
-    """Return an OCR item's rectangle as x0, y0, x1, y1."""
+    """Convert one OCR token's possible geometry formats into a simple rectangle.
+    
+    Paddle versions may provide ``bbox``, ``polygon``, or other point arrays. This
+    helper accepts the available form and returns ``left, top, right, bottom`` values.
+    Layout-aware address reconstruction uses the rectangle to group tokens into lines."""
     raw = first_nonempty_value(item.get("bbox"), item.get("polygon"))
     if raw is None:
         return None
@@ -570,11 +596,14 @@ def _layout_address_lines(
     bottom_fraction: float,
     line_tolerance: float,
 ) -> list[str]:
-    """Rebuild bottom-page OCR lines from bounding boxes.
-
-    Keeping tokens on their physical line prevents an isolated OCR token from a
-    neighboring line (for example ``0``) from being prepended to a real address.
-    """
+    """Reconstruct readable text lines from OCR tokens near page bottoms.
+    
+    Most survey title blocks are in the lower part of a page. For each OCR page, the
+    function filters tokens by vertical position, estimates a typical token height,
+    groups nearby tokens into the same physical line, then sorts each line left-to-right.
+    
+    The resulting strings preserve visual layout better than Paddle's global text order.
+    ``first_valid_address`` searches these lines before falling back to plain OCR text."""
     lines: list[str] = []
     for page in ocr_pages or []:
         try:
@@ -642,7 +671,12 @@ def first_valid_address(
     config: Config,
     ocr_pages: Iterable[Mapping[str, Any]] | None = None,
 ) -> str | None:
-    """Return a plausible address, preferring bounding-box reconstructed lines."""
+    """Return the first plausible project address found in OCR output.
+    
+    Coordinate-aware title-block lines are searched first because they are less likely
+    to confuse the engineering company's contact address with the property address.
+    Every regex candidate is passed through ``is_ignored_address``. If geometry is
+    unavailable, the function repeats the same validation against plain OCR text."""
     if ocr_pages:
         try:
             bottom_fraction = float(
@@ -668,6 +702,9 @@ def first_valid_address(
                 if address and not is_ignored_address(address, config):
                     return address
 
+    # FALLBACK - Old saved OCR results or unusual Paddle versions may not
+    # contain geometry. Plain-text scanning is less precise, but retaining it
+    # prevents layout improvements from breaking those documents.
     # Compatibility fallback for PDFs/results without usable bounding boxes.
     for address in all_matches(text, config.get("address_patterns", [])):
         if address and not is_ignored_address(address, config):
@@ -676,17 +713,11 @@ def first_valid_address(
 
 
 def _points_from_any(value: Any) -> list[list[float]]:
-    """Points from any.
-
-    Args:
-        value: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-
-    Notes:
-        Errors are handled or propagated according to the surrounding scan/API workflow.
-    """
+    """Safely convert a loose collection of OCR points into numeric ``[x, y]`` pairs.
+    
+    Invalid items are skipped rather than failing the entire document. This defensive
+    conversion is needed because OCR libraries may return lists, tuples, NumPy values,
+    or partially missing geometry depending on version and page content."""
     if not isinstance(value, (list, tuple)):
         return []
     points: list[list[float]] = []
@@ -700,14 +731,10 @@ def _points_from_any(value: Any) -> list[list[float]]:
 
 
 def _bbox_from_points(points: list[list[float]]) -> list[float]:
-    """Bbox from points.
-
-    Args:
-        points: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Compute the smallest axis-aligned rectangle enclosing polygon points.
+    
+    The minimum and maximum x/y values make later layout calculations simple. An empty
+    point list returns a zero rectangle, which callers can treat as unusable geometry."""
     if not points:
         return [0.0, 0.0, 0.0, 0.0]
     xs = [point[0] for point in points]
@@ -716,14 +743,11 @@ def _bbox_from_points(points: list[list[float]]) -> list[float]:
 
 
 def first_nonempty_value(*values: Any) -> Any:
-    """First nonempty value.
-
-    Args:
-        *values: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Choose the first supplied OCR field that contains usable data.
+    
+    Different PaddleOCR versions store equivalent geometry under different keys. This
+    helper lets compatibility code try those keys in preferred order without a chain of
+    repeated ``if`` statements."""
     for value in values:
         if value not in (None, "", [], {}):
             return value
@@ -731,14 +755,11 @@ def first_nonempty_value(*values: Any) -> Any:
 
 
 def is_known_value(value: str) -> bool:
-    """Is known value.
-
-    Args:
-        value: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Test whether a value is real metadata rather than a UI placeholder.
+    
+    Empty strings, ``Unknown ...`` labels, ``Project``, and ``Document`` must not win
+    batch votes or overwrite an existing known value. This shared definition keeps
+    voting, merging, and SDAT application consistent."""
     value = str(value or "").strip()
     return (
         bool(value)
@@ -757,7 +778,22 @@ def extract_metadata(
     performance_callback: Any | None = None,
     profile_label: str = "document",
 ) -> ExtractedMetadata:
-    """Extract metadata and optionally emit detailed per-stage performance timings."""
+    """Run the complete classification and metadata extraction process for one PDF.
+    
+    App role:
+        This is the main public function of the module. OCR services supply text and
+        page geometry; the batch pipeline receives one ``ExtractedMetadata`` result.
+    
+    Processing order:
+        1. Recognize SDAT lookup printouts and extract only their Tax ID.
+        2. Try high-priority regex document rules, then the fast exact/fuzzy classifier.
+        3. Search for lot after the matched title and search the full text for map,
+           parcel, Tax ID, address, and project code.
+        4. Sanitize values needed by Windows paths and build the immutable result.
+        5. Emit per-stage timings when profiling is enabled.
+    
+    The function intentionally does not call the SDAT network API. Network enrichment
+    occurs later, after Batch mode has combined evidence from all related drawings."""
     from sdat import (
         LOOKUP_DOCUMENT_TYPE,
         extract_sdat_lookup_tax_id,
@@ -769,12 +805,19 @@ def extract_metadata(
     stage_rows: list[tuple[str, float]] = []
 
     def stage(label: str, started: float) -> float:
+        """Record one named sub-stage in the per-document performance report.
+        
+        The nested helper measures from the caller's supplied start time, stores the row for
+        later ranking, and emits a line immediately so a slow or stalled stage is visible in
+        the terminal and progress panel."""
         elapsed = time.perf_counter() - started
         stage_rows.append((label, elapsed))
         emit(f"[META-PERF] {profile_label}.{label}: {elapsed:.4f}s")
         return elapsed
 
     started = time.perf_counter()
+    # STAGE 1 - Lookup PDFs follow a deliberately short path. They contribute
+    # a Tax ID to the packet but should not be classified or filed as plans.
     lookup_document = is_sdat_lookup_document(text)
     stage("lookup_document_detection", started)
     if lookup_document:
@@ -794,6 +837,8 @@ def extract_metadata(
         return result
 
     started = time.perf_counter()
+    # STAGE 2 - Rules for unambiguous phrases run before fuzzy matching. This
+    # both improves precedence and lets clear documents skip expensive scoring.
     doc_match = regex_document_type(text, config.get("document_type_regex_rules"))
     stage("document_type_regex", started)
 
@@ -816,6 +861,8 @@ def extract_metadata(
     stage("document_type_fallback", started)
 
     started = time.perf_counter()
+    # Search for the lot after the detected title when possible. This reduces
+    # the chance that a revision note or unrelated header number is chosen.
     lot_search_text = text[doc_match.start :] if doc_match else text
     lot = first_match(lot_search_text, config.get("lot_pattern", [])) or "Unknown Lot"
     stage("lot_extraction", started)
@@ -864,27 +911,19 @@ def extract_metadata(
 
 
 def prefer_known(value: str, fallback: str) -> str:
-    """Prefer known.
-
-    Args:
-        value: Input used by this operation.
-        fallback: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Use a proposed metadata value only when it is genuinely known.
+    
+    Batch merging calls this for every shared property field. A blank or placeholder
+    shared value must not erase a valid value extracted from the individual drawing."""
     return value if is_known_value(value) else fallback
 
 
 def normalize_identifier(value: Any) -> str:
-    """Normalize identifier.
-
-    Args:
-        value: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Reduce an identifier to a comparison key independent of formatting and zero padding.
+    
+    Punctuation is removed, letters are uppercased, and leading zeros are ignored. This
+    allows values such as ``0012`` and ``12`` to compare equal when SDAT stores a fixed
+    width but the plan prints a shorter form."""
     cleaned = re.sub(r"[^0-9A-Za-z]", "", str(value or "")).upper()
     return cleaned.lstrip("0") or cleaned
 
@@ -892,15 +931,11 @@ def normalize_identifier(value: Any) -> str:
 def identifier_options(
     value: str, widths: Iterable[int] = (2, 3, 4, 6, 8)
 ) -> list[str]:
-    """Identifier options.
-
-    Args:
-        value: Input used by this operation.
-        widths: Input used by this operation.
-
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    """Generate the padded and unpadded forms that SDAT may use for one identifier.
+    
+    Socrata queries compare text exactly. For a numeric map, parcel, district, or account
+    value, this helper returns the original compact form, the form without leading zeros,
+    and allowed zero-padded widths. ``sdat.or_equals`` turns those options into one query."""
     compact = re.sub(r"[^0-9A-Za-z]", "", str(value or "")).upper()
     if not compact:
         return []

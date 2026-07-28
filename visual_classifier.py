@@ -1,10 +1,14 @@
-"""Optional image-based classifier for distinguishing Field Notes from other documents. Model loading is cached, feature extraction is isolated, and text-based classification remains available as a fallback.
+"""Recognize Field Notes from page appearance rather than OCR wording.
 
-Maintenance notes:
-    Keep this module focused on its current responsibility. When changing behavior,
-    update the relevant tests and the project README so scan and review workflows
-    remain understandable to future maintainers.
-"""
+Field Notes may contain a plan title in copied text or may not contain a
+reliable title at all. This module renders a small grayscale image and
+measures visual characteristics such as page count, darkness, edge
+density, margins, and lower-right title-block density.
+
+During normal scanning the visual model is a safety net, not the primary
+classifier. It runs only when a batch contains duplicate plan types and
+may convert one visually convincing duplicate into ``Field Notes`` while
+preserving at least one original plan classification."""
 
 from __future__ import annotations
 
@@ -30,30 +34,29 @@ NOT_FIELD_NOTES_LABEL = "not_field_notes"
 
 @lru_cache(maxsize=4)
 def _load_model_cached(model_path: str, modified_ns: int) -> Any:
-    """Load a joblib model once per path/version.
-
-    ``modified_ns`` is part of the cache key, so replacing or retraining the
-    model invalidates the old cached entry automatically.
-    """
+    """Deserialize one visual-classifier model for a specific file version.
+    
+    ``functools.lru_cache`` surrounds this function. Including modification time in the arguments
+    means replacing or retraining the model creates a new cache entry automatically instead of
+    continuing to use stale predictions."""
     if joblib is None:
         return None
     return joblib.load(model_path)
 
 
 def clear_model_cache() -> None:
-    """Clear the in-process visual classifier model cache."""
+    """Forget every model object cached in the current Python process.
+    
+    Training calls this after writing a new joblib file so the next classification immediately
+    loads the new model rather than waiting for a process restart."""
     _load_model_cached.cache_clear()
 
 
 def _get_cached_model(model_file: Path) -> Any:
-    """Get cached model.
+    """Load the current model file through the modification-aware cache.
     
-    Args:
-        model_file: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    """
+    The resolved path and nanosecond modification time form the cache key. This wrapper keeps file
+    inspection separate from the cached deserializer and gives callers one simple entry point."""
     stat = model_file.stat()
     return _load_model_cached(str(model_file.resolve()), stat.st_mtime_ns)
 
@@ -61,7 +64,11 @@ def _get_cached_model(model_file: Path) -> Any:
 def render_page_gray(
     pdf_path: Path, page_index: int = 0, dpi: int = 72
 ) -> np.ndarray | None:
-    """Render one PDF page as a small grayscale numpy image for visual classification."""
+    """Render one PDF page into a small grayscale NumPy image for visual analysis.
+    
+    PyMuPDF creates an RGB pixmap, NumPy reshapes its byte buffer, and averaging the three channels
+    produces grayscale intensity. Missing pages or unreadable PDFs return ``None`` so the caller can
+    use zero features or a heuristic fallback without stopping the scan."""
     try:
         with fitz.open(pdf_path) as doc:
             if doc.page_count <= page_index:
@@ -78,17 +85,10 @@ def render_page_gray(
 
 
 def pdf_page_count(pdf_path: Path) -> int:
-    """Pdf page count.
+    """Read the number of pages in a PDF for use as a visual feature.
     
-    Args:
-        pdf_path: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    
-    Notes:
-        Errors are handled or propagated according to the surrounding scan/API workflow.
-    """
+    Multi-page notebooks are more likely to be Field Notes than a single-sheet plan. Unreadable
+    files return zero, allowing feature extraction to continue with a conservative value."""
     try:
         with fitz.open(pdf_path) as doc:
             return int(doc.page_count)
@@ -99,7 +99,11 @@ def pdf_page_count(pdf_path: Path) -> int:
 def _resize_sample(
     gray: np.ndarray, target_h: int = 256, target_w: int = 192
 ) -> np.ndarray:
-    """Fast dependency-free resize by sampling. Good enough for classification features."""
+    """Downsample a grayscale page to a fixed feature grid without an image-processing dependency.
+    
+    Evenly spaced source row and column indexes create a repeatable 256-by-192 sample. Every PDF
+    therefore yields the same feature length regardless of original page size. Empty images become
+    an all-white/zero placeholder array."""
     if gray.size == 0:
         return np.zeros((target_h, target_w), dtype=np.uint8)
     y_idx = np.linspace(0, gray.shape[0] - 1, target_h).astype(int)
@@ -108,16 +112,15 @@ def _resize_sample(
 
 
 def visual_features(pdf_path: Path) -> np.ndarray:
-    """Extract visual features without OCR.
-
-    Binary classifier target:
-      - field_notes
-      - not_field_notes
-
-    These features separate notebook/field-note pages from all non-field-note
-    documents by page count, page aspect, darkness, edge texture, margins, and
-    title-block-like density in the lower-right area.
-    """
+    """Convert a PDF's appearance into a fixed numeric vector for binary classification.
+    
+    Features include page count, aspect ratio, dark-pixel ratios, edge texture, lower-right
+    title-block density, broad page regions, and a 4x4 darkness grid. They are intentionally based
+    on layout rather than words, so the classifier can recognize notebook-like Field Notes even
+    when OCR sees misleading plan terminology.
+    
+    An unreadable first page returns a zero vector of the expected length so prediction code keeps a
+    valid shape."""
     page_count = pdf_page_count(pdf_path)
     gray = render_page_gray(pdf_path)
     if gray is None:
@@ -136,6 +139,8 @@ def visual_features(pdf_path: Path) -> np.ndarray:
     top_half = small[: int(h * 0.50), :]
     left_half = small[:, : int(w * 0.50)]
 
+    # Divide the page into a coarse 4x4 grid. This captures where ink appears
+    # without tying the model to exact paper size or scanner resolution.
     zone_features: list[float] = []
     for y0 in np.linspace(0, h, 5, dtype=int)[:-1]:
         y1 = min(h, y0 + h // 4)
@@ -161,7 +166,11 @@ def visual_features(pdf_path: Path) -> np.ndarray:
 
 
 def heuristic_field_notes_probability(pdf_path: Path) -> float:
-    """Fallback visual score when no trained model is available."""
+    """Estimate Field Notes likelihood when no trained model is available.
+    
+    The hand-written score adds evidence for multiple pages, portrait shape, sparse lower-right
+    title block, moderate edge density, and moderate ink coverage. The final value is clamped below
+    1.0 to signal that this fallback is a useful estimate rather than a learned certainty."""
     features = visual_features(pdf_path)
     page_count = features[0]
     aspect = features[1]
@@ -189,11 +198,11 @@ def heuristic_field_notes_probability(pdf_path: Path) -> float:
 def classify_pdf_visual(
     pdf_path: str | Path, model_path: str | Path | None = None
 ) -> tuple[str, float]:
-    """Classify a PDF visually as field_notes or not_field_notes.
-
-    If visual_field_notes_classifier.joblib exists and joblib is installed, it is used.
-    Otherwise a lightweight heuristic is used. This function does not use OCR text.
-    """
+    """Label one PDF as ``field_notes`` or ``not_field_notes`` without using OCR text.
+    
+    A saved joblib model is preferred when both the file and dependency exist. The function extracts
+    one feature row, asks the model for a label, and uses ``predict_proba`` when available for
+    confidence. Otherwise it applies the deterministic heuristic and a 0.70 decision threshold."""
     path = Path(pdf_path)
     model_file = Path(model_path) if model_path else MODEL_PATH
 
@@ -216,7 +225,15 @@ def classify_pdf_visual(
 def train_visual_classifier(
     training_root: str | Path, output_model: str | Path = MODEL_PATH
 ) -> None:
-    """Train binary visual classifier from folders: field_notes and not_field_notes."""
+    """Train and save the optional binary Field Notes model from labeled PDF folders.
+    
+    Each PDF in ``field_notes`` and ``not_field_notes`` becomes one feature vector. The function
+    validates that both classes and a minimally useful sample count exist, creates a stratified test
+    split when possible, trains a balanced random forest, saves it with joblib, clears the runtime
+    cache, and prints an evaluation report.
+    
+    This developer operation changes only the model artifact; ordinary scan code never trains during
+    a user request."""
     if joblib is None:
         raise RuntimeError(
             "Install joblib and scikit-learn to train the visual classifier."
@@ -283,17 +300,10 @@ PLAN_DOCUMENT_TYPES = {"Site Plan", "House Location", "Wall Check"}
 
 
 def _field_notes_visual_threshold(config: Config) -> float:
-    """Field notes visual threshold.
+    """Read the configured confidence required to reclassify a duplicate plan as Field Notes.
     
-    Args:
-        config: Input used by this operation.
-    
-    Returns:
-        The computed result for the caller. See the function body and type hints for the exact shape.
-    
-    Notes:
-        Errors are handled or propagated according to the surrounding scan/API workflow.
-    """
+    Invalid configuration values fall back to 0.70. Keeping threshold parsing here gives batch
+    correction one predictable numeric value and prevents a bad JSON edit from failing the scan."""
     try:
         return float(config.get("visual_field_notes_threshold", 0.70))
     except Exception:  # noqa: BLE001
@@ -305,13 +315,15 @@ def fix_duplicate_document_types_with_visual_classifier(
     scanned_documents: list[dict[str, Any]],
     config: Config,
 ) -> list[ExtractedMetadata]:
-    """Use visual classification to catch field notes mislabeled as plan documents.
-
-    This is intentionally a post-processing safety net. It only runs when there
-    are duplicate plan document types in the same batch, because that is the
-    common signal that Field Notes were OCR-labeled as Site Plan/Wall Check/etc.
-    It does not use OCR text; it renders the PDF and classifies the page visuals.
-    """
+    """Repair likely Field Notes that OCR classified as a duplicate plan type.
+    
+    The function groups metadata votes by document type and examines only duplicate Site Plan,
+    House Location, or Wall Check groups. Those duplicates are the signal that one notebook PDF may
+    contain copied/misread plan wording. Each candidate is visually classified and high-confidence
+    Field Notes are converted.
+    
+    At least one original plan label is always preserved, preventing the safety net from erasing the
+    only genuine plan in the packet. Disabling the feature in config returns the votes unchanged."""
     if not config.get("visual_field_notes_classifier", True):
         return votes
 
@@ -322,6 +334,9 @@ def fix_duplicate_document_types_with_visual_classifier(
     updated = list(votes)
     threshold = _field_notes_visual_threshold(config)
 
+    # Only duplicate plan labels are suspicious enough to justify an override.
+    # A single plan classification is left untouched even if the visual model
+    # is uncertain, which keeps this feature a conservative safety net.
     for document_type, indexes in by_type.items():
         if (
             document_type == "Field Notes"
