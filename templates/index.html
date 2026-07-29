@@ -3,10 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>DIME</title>
+    <title>DIME — Document Identifier and Metadata Extractor</title>
+    <link rel="icon" href="{{ url_for('static', filename='images/favicon.ico') }}" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='images/favicon-32x32.png') }}" />
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='images/favicon-16x16.png') }}" />
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='images/favicon-180x180.png') }}" />
     <link
       rel="stylesheet"
-      href="{{ url_for('static', filename='styles.css') }}?v=20260721-9"
+      href="{{ url_for('static', filename='styles.css') }}?v=20260729-dime"
     />
   </head>
 
@@ -14,9 +18,15 @@
     <!-- COABarrett application shell. Most content is populated and synchronized by
          static/app.js; element IDs therefore form a contract with the JavaScript. -->
     <header class="app-header">
-      <div>
-        <h1>DIME</h1>
-        <p>Document Identifier and Metadata Extractor</p>
+      <div class="app-brand">
+        <img
+          class="app-brand-logo"
+          src="{{ url_for('static', filename='images/dime-logo.png') }}"
+          alt="DIME — Document Identifier and Metadata Extractor"
+        />
+        <div class="app-brand-copy">
+          <p>Document Identifier and Metadata Extractor</p>
+        </div>
       </div>
       <div class="header-actions">
         <button id="scanButton" class="primary">Scan PDFs</button>

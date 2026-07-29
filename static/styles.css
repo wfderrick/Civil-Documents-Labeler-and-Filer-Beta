@@ -1284,3 +1284,68 @@ select:focus {
   box-sizing: border-box;
 }
 .custom-document-type-control.hidden { display: none; }
+
+/* --------------------------------------------------------------------------
+   DIME application branding
+   -------------------------------------------------------------------------- */
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.app-brand-logo {
+  display: block;
+  width: auto;
+  height: 76px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.app-brand-copy {
+  min-width: 0;
+  padding-left: 2px;
+  border-left: 1px solid #cbdcf0;
+}
+
+.app-brand-copy p {
+  margin: 0;
+  padding-left: 14px;
+  color: #476684;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.app-header {
+  min-height: 104px;
+}
+
+.layout {
+  min-height: calc(100vh - 105px);
+}
+
+@media (max-width: 760px) {
+  .app-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .app-brand-logo {
+    height: 64px;
+  }
+
+  .app-brand-copy p {
+    white-space: normal;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .header-actions button {
+    flex: 1;
+  }
+}

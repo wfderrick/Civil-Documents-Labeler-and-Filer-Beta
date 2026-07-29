@@ -52,6 +52,7 @@ from ocr_service import get_cached_ocr, ocr_pdf_batch
 from pipeline import (
     LOOKUP_DOCUMENT_TYPE,
     choose_batch_metadata_by_vote,
+    extract_independent_document_metadata,
     merge_batch_metadata,
 )
 from scan_status import (
@@ -371,28 +372,17 @@ def scan_mass(
             progress_callback=report,
         )[0]
 
-        shared_metadata, metadata_votes = choose_batch_metadata_by_vote(
-            scanned_documents=[scanned_document],
+        # Mass mode deliberately uses a single-document pipeline. No values from
+        # another PDF can vote, merge, or influence this result. The helper still
+        # performs conservative SDAT verification for this one property.
+        final_metadata = extract_independent_document_metadata(
+            scanned_document=scanned_document,
             config=config,
             default_project_code=settings["project_code"],
             default_document_type=settings["document_type"],
-            resolve_duplicate_document_types=False,
-            strict_independent_lookup=True,
+            performance_callback=report,
         )
-        metadata_vote = metadata_votes[0]
-        is_lookup = metadata_vote.document_type == LOOKUP_DOCUMENT_TYPE
-        final_metadata = (
-            metadata_vote
-            if is_lookup
-            else merge_batch_metadata(
-                document_text=scanned_document["ocr_text"],
-                config=config,
-                default_project_code=settings["project_code"],
-                default_document_type=settings["document_type"],
-                shared_metadata=shared_metadata,
-                document_metadata=metadata_vote,
-            )
-        )
+        is_lookup = final_metadata.document_type == LOOKUP_DOCUMENT_TYPE
         document = sync_document_metadata(
             {
                 "id": uuid.uuid4().hex,
