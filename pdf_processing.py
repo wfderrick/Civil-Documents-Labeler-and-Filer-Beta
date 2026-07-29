@@ -29,7 +29,7 @@ except Exception:  # noqa: BLE001
 
 def metadata_keyword_text(document: dict[str, Any]) -> str:
     """Build one searchable semicolon-separated summary of a filed document.
-    
+
     The string includes visible project fields, the original filename, and filing time.
     Standard PDF Keywords and XMP both use it, giving Windows search and PDF tools a compact
     text representation even when they do not understand the custom XMP namespace."""
@@ -55,7 +55,7 @@ def write_standard_pdf_metadata(
     pdf_path: Path, document: dict[str, Any]
 ) -> None:
     """Update the PDF metadata fields commonly visible in file browsers and readers.
-    
+
     PyMuPDF opens the already prepared PDF, keeps unrelated existing metadata, and replaces
     Title, Subject, Keywords, and Creator with project-aware values. ``saveIncr`` writes an
     incremental update instead of rebuilding the whole PDF."""
@@ -75,12 +75,12 @@ def write_standard_pdf_metadata(
 
 def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
     """Store detailed project and SDAT values in structured XMP metadata.
-    
+
     If ``pikepdf`` is unavailable, standard metadata still works and this optional step is
     skipped. Otherwise the function registers the custom ``coa`` namespace, writes common
     Dublin Core/PDF fields, then copies every non-empty project and property value to a named
     XMP field.
-    
+
     The PDF is opened with permission to overwrite itself. Errors are caught and printed
     because losing optional metadata should not corrupt or block an otherwise filed document."""
     if pikepdf is None:
@@ -115,23 +115,8 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
                     "coa:Parcel": metadata.get("parcel", ""),
                     "coa:TaxID": metadata.get("tax_id", ""),
                     "coa:Section": metadata.get("section", ""),
-                    "coa:JurisdictionCode": metadata.get(
-                        "jurisdiction_code_mdp_field_jurscode", ""
-                    ),
-                    "coa:FinderOnlineLink": metadata.get(
-                        "finder_online_link", ""
-                    ),
-                    "coa:LongitudeWGS84": metadata.get(
-                        "mdp_longitude_mdp_field_digxcord_converted_to_wgs84",
-                        "",
-                    ),
-                    "coa:LatitudeWGS84": metadata.get(
-                        "mdp_latitude_mdp_field_digycord_converted_to_wgs84",
-                        "",
-                    ),
-                    "coa:MappableLatitudeAndLongitude": metadata.get(
-                        "mappable_latitude_and_longitude", ""
-                    ),
+                    "coa:County": metadata.get("county", ""),
+                    "coa:AccountID": metadata.get("account_id", ""),
                     "coa:LegalDescriptionLine1": metadata.get(
                         "legal_description_line_1_mdp_field_legal1_sdat_field_17",
                         "",
@@ -140,16 +125,21 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
                         "legal_description_line_2_mdp_field_legal2_sdat_field_18",
                         "",
                     ),
-                    "coa:DeedReference1Liber": metadata.get(
+                    "coa:DeedReferenceLiber": metadata.get(
                         "deed_reference_1_liber_mdp_field_dr1liber_sdat_field_30",
                         "",
                     ),
-                    "coa:DeedReference1Folio": metadata.get(
+                    "coa:DeedReferenceFolio": metadata.get(
                         "deed_reference_1_folio_mdp_field_dr1folio_sdat_field_31",
                         "",
                     ),
-                    "coa:SubdivisionCode": metadata.get(
-                        "subdivision_code_mdp_field_subdivsn_sdat_field_37", ""
+                    "coa:PlatReferenceLiber": metadata.get(
+                        "plat_reference_liber_mdp_field_pltliber_sdat_field_267",
+                        "",
+                    ),
+                    "coa:PlatReferenceFolio": metadata.get(
+                        "plat_reference_folio_mdp_field_pltfolio_sdat_field_268",
+                        "",
                     ),
                     "coa:Grid": metadata.get(
                         "grid_mdp_field_grid_sdat_field_43", ""
@@ -168,18 +158,6 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
                         "property_factors_utilities_sewer_mdp_field_pfus_sdat_field_64",
                         "",
                     ),
-                    "coa:Waterfront": metadata.get(
-                        "property_factors_location_waterfront_mdp_field_pflw_sdat_field_65",
-                        "",
-                    ),
-                    "coa:StreetPaved": metadata.get(
-                        "property_factors_street_paved_mdp_field_pfsp_sdat_field_67",
-                        "",
-                    ),
-                    "coa:StreetUnpaved": metadata.get(
-                        "property_factors_street_unpaved_mdp_field_pfsu_sdat_field_68",
-                        "",
-                    ),
                     "coa:OriginalFileName": document.get("source_name", ""),
                     "coa:FiledAt": datetime.now().isoformat(  # noqa: DTZ005
                         timespec="seconds"
@@ -196,7 +174,7 @@ def write_xmp_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
 
 def write_pdf_metadata(pdf_path: Path, document: dict[str, Any]) -> None:
     """Run both metadata writers as one best-effort filing step.
-    
+
     Standard metadata is attempted first and protected by its own exception handler. XMP is
     attempted afterward even if the standard update failed. ``file_document_to_output`` calls
     this facade so it does not need to know which PDF libraries are installed."""

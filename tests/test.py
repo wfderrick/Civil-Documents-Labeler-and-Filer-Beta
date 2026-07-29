@@ -26,7 +26,7 @@ The commented examples at the bottom preserve two earlier developer experiments.
 
 import pikepdf
 
-pdf = pikepdf.Pdf.open("tests\\Site Plan - Lot 104.pdf")
+pdf = pikepdf.Pdf.open("C:\\temp\\Site Plan - Lot 7.pdf")
 
 with pdf.open_metadata() as meta:
     for key, value in meta.items():

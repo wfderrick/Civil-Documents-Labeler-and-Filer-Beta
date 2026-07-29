@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>PaddleOCR Review Queue</title>
+    <title>DIME</title>
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='styles.css') }}?v=20260721-9"
@@ -15,11 +15,8 @@
          static/app.js; element IDs therefore form a contract with the JavaScript. -->
     <header class="app-header">
       <div>
-        <h1>Document Review Queue</h1>
-        <p>
-          Review OCR metadata, choose filing folders, and edit final PDF names
-          before filing.
-        </p>
+        <h1>DIME</h1>
+        <p>Document Identifier and Metadata Extractor</p>
       </div>
       <div class="header-actions">
         <button id="scanButton" class="primary">Scan PDFs</button>
@@ -271,7 +268,11 @@
                   <option value="__custom__">Custom...</option>
                 </select>
               </label>
-              <label id="customDocumentTypeControl" class="custom-document-type-control hidden" for="customDocumentType">
+              <label
+                id="customDocumentTypeControl"
+                class="custom-document-type-control hidden"
+                for="customDocumentType"
+              >
                 <span>Custom document type</span>
                 <input
                   id="customDocumentType"
