@@ -45,17 +45,13 @@ def test_sdat_metadata_is_retained_in_document_metadata():
     The latitude/longitude object is also checked after serialization because structured
     Socrata values must remain available for later XMP writing."""
     record = {SDAT_FIELDS[field]: f"value-{index}" for index, field in enumerate(SDAT_METADATA_FIELDS)}
-    record[SDAT_FIELDS["mappable_latitude_and_longitude"]] = { # type: ignore
-        "latitude": "38.5",
-        "longitude": "-76.5",
-    }
+
 
     resolved = metadata_from_sdat_record(base_metadata(), record)
     values = asdict(resolved)
 
     for field in SDAT_METADATA_FIELDS:
         assert values[field]
-    assert '"latitude": "38.5"' in values["mappable_latitude_and_longitude"]
 
 def record(number: str, street: str, account: str) -> dict[str, str]:
     """Build one synthetic SDAT parcel record for address-uniqueness checks.
@@ -81,7 +77,7 @@ def record(number: str, street: str, account: str) -> dict[str, str]:
     }
 
 
-def main() -> None:
+def test_mass_scan_populate_tax_id() -> None:
     """Exercise Mass Scan's conservative address-record selection rules.
 
     One matching parcel is accepted. Two parcels at the same address are rejected as

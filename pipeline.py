@@ -23,11 +23,11 @@ lookup rules so unrelated jobs cannot contaminate one another."""
 from __future__ import annotations
 
 import re
+import time
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from typing import Any
-import time
 
 from metadata_extraction import (
     Config,
@@ -51,6 +51,7 @@ from sdat import (
 from visual_classifier import (
     fix_duplicate_document_types_with_visual_classifier,
 )
+
 
 def vote_key(value: str) -> str:
     """Convert a metadata value into the key used for batch majority voting.
