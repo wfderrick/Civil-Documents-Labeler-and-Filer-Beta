@@ -29,6 +29,7 @@
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='styles.css') }}?v=20260729-dime"
+      href="{{ url_for('static', filename='styles.css') }}?v=20260729-dime"
     />
   </head>
 
@@ -36,6 +37,15 @@
     <!-- COABarrett application shell. Most content is populated and synchronized by
          static/app.js; element IDs therefore form a contract with the JavaScript. -->
     <header class="app-header">
+      <div class="app-brand">
+        <img
+          class="app-brand-logo"
+          src="{{ url_for('static', filename='images/dime-logo.png') }}"
+          alt="DIME — Document Identifier and Metadata Extractor"
+        />
+        <div class="app-brand-copy">
+          <p>Document Identifier and Metadata Extractor</p>
+        </div>
       <div class="app-brand">
         <img
           class="app-brand-logo"
