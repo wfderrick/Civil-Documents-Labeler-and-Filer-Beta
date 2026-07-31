@@ -33,6 +33,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+import webbrowser
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,7 @@ from ocr_service import get_cached_ocr, ocr_pdf_batch
 from pipeline import (
     LOOKUP_DOCUMENT_TYPE,
     choose_batch_metadata_by_vote,
+    extract_independent_document_metadata,
     merge_batch_metadata,
 )
 from scan_status import (
@@ -81,7 +83,11 @@ DEFAULT_STATE: dict[str, Any] = {"settings": {}, "documents": []}
 REQUIRED_METADATA_FIELDS = ("lot", "address", "project_code", "document_type")
 OPTIONAL_METADATA_FIELDS = ("tax_map", "parcel", "tax_id", "section")
 
-app = Flask("ocr_pipeline_gpu_optimized")
+app = Flask(
+    "ocr_pipeline_gpu_optimized",
+    template_folder=APP_DIR / "templates",
+    static_folder=APP_DIR / "static",
+)
 
 _SCAN_PROGRESS_LOCK = threading.Lock()
 _SCAN_PROGRESS: dict[str, Any] = {
@@ -99,9 +105,10 @@ _SCAN_PROGRESS: dict[str, Any] = {
 # These functions are called by the Flask routes later in this file. They do not
 # become browser URLs until a route-decorated function calls them.
 
+
 def api_error(message: str, status_code: int = 500):
     """Create the error response format expected by the browser.
-    
+
     Every JavaScript request looks for an ``error`` key when a request
     fails. Centralizing that shape here keeps all Flask routes consistent
     and pairs the JSON body with the correct HTTP status code."""
@@ -110,7 +117,7 @@ def api_error(message: str, status_code: int = 500):
 
 def json_payload() -> dict[str, Any]:
     """Read a JSON request body and always return a dictionary.
-    
+
     Scan settings and document edits arrive from ``static/app.js`` as
     JSON. ``force=True`` asks Flask to decode that body even when the
     browser's content-type header is imperfect. An empty body becomes
@@ -120,7 +127,7 @@ def json_payload() -> dict[str, Any]:
 
 def resolve_folder(value: str) -> Path:
     """Convert a folder typed in the browser into one unambiguous Path.
-    
+
     ``expanduser`` changes ``~`` into the current user's home directory.
     ``resolve`` converts relative pieces such as ``..`` into an absolute
     location. The app stores that stable absolute path in its state file
@@ -130,12 +137,12 @@ def resolve_folder(value: str) -> Path:
 
 def scan_settings(payload: dict[str, Any]) -> dict[str, Any]:
     """Translate the browser's scan form into the settings used by Python.
-    
+
     The web form sends strings, checkboxes, and optional values. This
     function trims text, resolves folder paths, converts DPI to an integer,
     fills internal defaults that are not exposed in the interface, and
     normalizes the scan mode to lowercase.
-    
+
     The returned dictionary is saved with the review state and passed to
     both Batch and Mass scan functions. Keeping this conversion in one
     place prevents each scan path from interpreting the same form differently."""
@@ -176,12 +183,12 @@ def scan_batch(
     progress_callback=None,
 ) -> list[dict[str, Any]]:
     """Process every PDF in a folder as one related project packet.
-    
+
     App role:
         Batch mode assumes the PDFs describe the same property. It OCRs
         the whole set, lets repeated property values vote, enriches the
         shared result with SDAT, and prepares one review record per PDF.
-    
+
     How it works:
         1. Collect PDFs in stable filename order.
         2. Choose one GPU worker or the configured number of CPU workers.
@@ -192,7 +199,7 @@ def scan_batch(
            preserving its own document type.
         6. Give the packet one shared destination folder and generate each
            PDF's suggested filename and review status.
-    
+
     The returned dictionaries are ready to be written to the state store;
     this function does not move the original PDFs."""
     # STEP 1 - Freeze the packet order.
@@ -241,11 +248,12 @@ def scan_batch(
     report(f"Finished OCR processing in {ocr_elapsed:.2f} seconds.")
     report("Beginning metadata voting and SDAT enrichment.")
     metadata_started = time.perf_counter()
+
     def performance_output(message: str) -> None:
         # Print every profiler line to the terminal for easy copy/paste, while
         # also showing it in the application's progress feed.
         """Send one profiler line to both places a developer can observe it.
-        
+
         Printing makes the detailed report easy to copy from the terminal.
         Forwarding the same line to ``report`` also exposes it in the browser's
         progress panel. This nested callback is passed into the batch pipeline."""
@@ -319,7 +327,9 @@ def scan_batch(
 
     review_elapsed = time.perf_counter() - review_started
     set_scan_timing("review_record_preparation", review_elapsed)
-    report(f"Finished preparing documents for review in {review_elapsed:.2f} seconds.")
+    report(
+        f"Finished preparing documents for review in {review_elapsed:.2f} seconds."
+    )
     return documents
 
 
@@ -332,12 +342,12 @@ def scan_mass(
     document_ready_callback=None,
 ) -> list[dict[str, Any]]:
     """Process a folder as independent PDF jobs and publish each result early.
-    
+
     Mass mode is designed for a folder containing unrelated properties.
     Each PDF is OCRed, classified, SDAT-checked, named, and appended to
     the persistent review queue before the next PDF begins. The browser
     can therefore review completed items while later files are still scanning.
-    
+
     Unlike Batch mode, this function disables cross-document voting and
     duplicate-type correction. It also requests strict address matching so
     an ambiguous SDAT result cannot assign one parcel's Tax ID to another job."""
@@ -371,28 +381,17 @@ def scan_mass(
             progress_callback=report,
         )[0]
 
-        shared_metadata, metadata_votes = choose_batch_metadata_by_vote(
-            scanned_documents=[scanned_document],
+        # Mass mode deliberately uses a single-document pipeline. No values from
+        # another PDF can vote, merge, or influence this result. The helper still
+        # performs conservative SDAT verification for this one property.
+        final_metadata = extract_independent_document_metadata(
+            scanned_document=scanned_document,
             config=config,
             default_project_code=settings["project_code"],
             default_document_type=settings["document_type"],
-            resolve_duplicate_document_types=False,
-            strict_independent_lookup=True,
+            performance_callback=report,
         )
-        metadata_vote = metadata_votes[0]
-        is_lookup = metadata_vote.document_type == LOOKUP_DOCUMENT_TYPE
-        final_metadata = (
-            metadata_vote
-            if is_lookup
-            else merge_batch_metadata(
-                document_text=scanned_document["ocr_text"],
-                config=config,
-                default_project_code=settings["project_code"],
-                default_document_type=settings["document_type"],
-                shared_metadata=shared_metadata,
-                document_metadata=metadata_vote,
-            )
-        )
+        is_lookup = final_metadata.document_type == LOOKUP_DOCUMENT_TYPE
         document = sync_document_metadata(
             {
                 "id": uuid.uuid4().hex,
@@ -424,12 +423,12 @@ def scan_mass(
 
 def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
     """Infer project and section labels from the selected project folder name.
-    
+
     COA folders may follow ``PROJECT.SECTION-Description``. The text before
     the first period becomes the project code; the text after it, but before
     an optional dash, becomes the section. A folder without a period supplies
     only a project code.
-    
+
     ``api_scan`` uses these values when the user leaves the project-code box
     blank, reducing duplicate data entry while preserving a manual override."""
     name = output_folder.name.strip()
@@ -450,10 +449,11 @@ def _folder_project_and_section(output_folder: Path) -> tuple[str, str]:
 # the function directly below it. Route functions validate requests and delegate
 # the actual OCR, metadata, state, or filing work to the service modules.
 
+
 @app.errorhandler(Exception)
 def handle_unexpected_error(error):
     """Turn uncaught server exceptions into responses the interface can understand.
-    
+
     Flask calls this function only when a route did not handle an exception
     itself. Scan failures also mark the shared progress record as failed so
     polling stops with a useful message. API routes receive JSON because the
@@ -470,7 +470,7 @@ def handle_unexpected_error(error):
 @app.get("/")
 def index():
     """Serve the application's single review page.
-    
+
     Opening ``http://127.0.0.1:5055/`` reaches this route. Flask loads
     ``templates/index.html``; that page then loads ``static/app.js`` and
     ``static/styles.css`` and begins requesting the saved application state."""
@@ -480,7 +480,7 @@ def index():
 @app.get("/favicon.ico")
 def favicon():
     """Answer the browser's automatic favicon request without logging a 404.
-    
+
     The app does not currently ship an icon, so a successful empty response
     is quieter and has no effect on scanning or review behavior."""
     return "", 204
@@ -489,7 +489,7 @@ def favicon():
 @app.get("/api/state")
 def api_state():
     """Return the latest settings and review queue to the browser.
-    
+
     State is read from disk, then every document is re-synchronized so its
     suggested names and status reflect its current metadata. The browser uses
     this endpoint at startup and while Mass Scan is publishing new documents."""
@@ -504,7 +504,7 @@ def api_state():
 @app.get("/api/browse-folders")
 def api_browse_folders():
     """Provide one level of filesystem information for the folder-picker dialog.
-    
+
     The route resolves the requested directory, rejects missing or non-folder
     paths, lists child directories only, and also returns the parent path.
     JavaScript repeatedly calls this endpoint as the user navigates; no files
@@ -534,7 +534,7 @@ def api_browse_folders():
 @app.patch("/api/settings/output-folder")
 def api_update_output_folder():
     """Validate and persist an output folder chosen in the browser.
-    
+
     ``state_store.update_output_folder`` creates the directory when needed
     and performs the state update under the file lock. The route converts
     path-related failures into a 400 response so the interface can show the
@@ -556,7 +556,7 @@ def api_update_output_folder():
 @app.get("/api/scan-progress")
 def api_scan_progress():
     """Return a read-only snapshot of the active scan's messages and timings.
-    
+
     The JavaScript progress timer polls this small endpoint frequently. The
     snapshot is detached from the internal dictionary, so JSON serialization
     cannot mutate the live scan state."""
@@ -566,10 +566,10 @@ def api_scan_progress():
 @app.post("/api/scan")
 def api_scan():
     """Orchestrate an entire scan request from form submission to review queue.
-    
+
     This is the main server-side entry point for scanning. It deliberately
     coordinates other modules rather than implementing OCR itself.
-    
+
     Processing stages:
         1. Reset progress and normalize the submitted settings.
         2. Validate input/output folders and create the output directory.
@@ -578,7 +578,7 @@ def api_scan():
         5. Run ``scan_batch`` or ``scan_mass`` according to the selected mode.
         6. Persist the resulting queue, record total timing, and mark progress
            finished so browser polling can stop.
-    
+
     Early validation failures update both the HTTP response and progress panel.
     In Mass mode, completed documents are appended during the scan, so the final
     state is re-read from disk instead of relying on an old in-memory copy."""
@@ -731,7 +731,9 @@ def api_scan():
     final_state = read_state() if scan_mode == "mass" else state
     total_elapsed = time.perf_counter() - scan_started
     set_scan_timing("scan_total", total_elapsed)
-    add_scan_progress(f"Performance summary: total scan time {total_elapsed:.2f} seconds.")
+    add_scan_progress(
+        f"Performance summary: total scan time {total_elapsed:.2f} seconds."
+    )
     finish_scan_progress(
         message=f"Scan complete. {len(final_state['documents'])} document(s)\
           ready for review."
@@ -751,12 +753,12 @@ async def api_scan_trigger():
 @app.patch("/api/documents/<document_id>")
 def api_update_document(document_id: str):
     """Apply one review-form edit to the matching live document.
-    
+
     The route delegates all business rules to ``apply_document_update`` inside
     ``state_store.update_document``. That locked transaction is important in
     Mass mode: a new OCR result can be appended while the user edits an older
     result, and neither change should overwrite the other.
-    
+
     The response includes the full refreshed queue plus the specifically
     updated record so JavaScript can redraw both the list and detail form."""
     payload = json_payload()
@@ -784,12 +786,12 @@ def api_update_document(document_id: str):
 @app.post("/api/documents/<document_id>/file")
 def api_file_document(document_id: str):
     """File one reviewed PDF and remove only that item from the active queue.
-    
+
     The route rejects lookup-only SDAT helper PDFs because they are not
     permanent project documents. It then resolves In-Place versus output-tree
     filing, calls ``file_document_to_output`` to write metadata and move/copy
     the PDF, and atomically removes the completed record.
-    
+
     Re-reading the latest state during removal protects documents that a Mass
     Scan may have appended while this filing request was running."""
     payload = request.get_json(silent=True) or {}
@@ -849,13 +851,13 @@ def api_file_document(document_id: str):
 @app.post("/api/file-all")
 def api_file_all_documents():
     """File every permanent document currently waiting for review.
-    
+
     All normal documents share the first document's destination folder in
     Batch mode. Each PDF is processed by the same single-document filing
     function, then a CSV audit row is appended. Lookup-only SDAT printouts are
     discarded only after every permanent file succeeds; In-Place mode keeps
     all source PDFs and skips the external tracker.
-    
+
     The review queue is cleared only after the filing loop completes, avoiding
     a state that claims work is finished when a file operation actually failed."""
     payload = request.get_json(silent=True) or {}
@@ -933,7 +935,7 @@ def api_file_all_documents():
 @app.get("/documents/<document_id>/pdf")
 def document_pdf(document_id: str):
     """Stream a source PDF into the embedded browser viewer.
-    
+
     The URL contains the stable review-record ID rather than a filesystem path.
     The function looks up that ID in state and passes the stored source path to
     Flask's ``send_file``. Missing records or deleted source files fall back to
@@ -947,13 +949,13 @@ def document_pdf(document_id: str):
                 as_attachment=False,
             )
         return send_file(
-            Path("file-not-found.pdf"),
+            APP_DIR / Path("docs/file-not-found.pdf"),
             mimetype="application/pdf",
             as_attachment=False,
         )
     except FileNotFoundError:
         return send_file(
-            Path("file-not-found.pdf"),
+            APP_DIR / Path("docs/file-not-found.pdf"),
             mimetype="application/pdf",
             as_attachment=False,
         )
@@ -970,4 +972,5 @@ the @app.get("/") decorator to call the index() function. This means that when
 the browser requests GET http://localhost:5055/(Which happens as soon as you 
 open the above address) the app object searches through defined routes and finds
  @app.get("/") pointing to the index() function and knows to call it."""
-    app.run(host="127.0.0.1", port=5055, debug=True)
+    webbrowser.open("http://127.0.0.1:5055", new=1)
+    app.run(host="127.0.0.1", port=5055, debug=False)

@@ -35,11 +35,12 @@ except Exception:  # noqa: BLE001
     paddle = None
 
 
-
 @contextmanager
-def time_block(name: str, progress_callback: Callable[[str], None] | None = None):
+def time_block(
+    name: str, progress_callback: Callable[[str], None] | None = None
+):
     """Measure one OCR operation and report its elapsed time when the block exits.
-    
+
     This context manager surrounds rendering and page recognition calls. Code inside the
     ``with`` block runs normally; afterward the helper formats a message for either the
     browser progress callback or the terminal. It keeps timing logic out of the OCR loops."""
@@ -55,7 +56,7 @@ def time_block(name: str, progress_callback: Callable[[str], None] | None = None
 
 def _as_float_pair(value: Any) -> list[float] | None:
     """Convert one point-like OCR value into a numeric x/y pair.
-    
+
     Geometry from third-party libraries is not always a plain Python list. Conversion is
     attempted defensively, and invalid values return ``None`` so one malformed point does
     not cancel OCR for the entire page."""
@@ -69,7 +70,7 @@ def _as_float_pair(value: Any) -> list[float] | None:
 
 def _points_from_any(value: Any) -> list[list[float]]:
     """Normalize rectangles or polygons returned by different PaddleOCR versions.
-    
+
     A four-number rectangle is expanded into its four corners. A list of point-like values
     is converted one item at a time. The rest of the app can therefore work with one
     polygon representation regardless of the OCR package version."""
@@ -97,7 +98,7 @@ def _points_from_any(value: Any) -> list[list[float]]:
 
 def _bbox_from_points(points: list[list[float]]) -> list[float]:
     """Collapse polygon points into ``left, top, right, bottom`` coordinates.
-    
+
     Metadata extraction and PDF text-layer logic need simple extents rather than arbitrary
     polygons. A zero rectangle represents missing geometry without raising an exception."""
     if not points:
@@ -109,7 +110,7 @@ def _bbox_from_points(points: list[list[float]]) -> list[float]:
 
 def first_nonempty_value(*values):
     """Select the first non-empty candidate from several OCR result fields.
-    
+
     NumPy arrays cannot always be tested with ordinary truth-value rules, so the helper
     checks ``size`` and ``len`` carefully. It is mainly used to locate whichever box field
     exists in the installed PaddleOCR version."""
@@ -129,11 +130,11 @@ def first_nonempty_value(*values):
 
 def extract_ocr_items(ocr_result: Any) -> list[dict[str, Any]]:
     """Convert raw PaddleOCR output into the application's stable token format.
-    
+
     PaddleOCR 3.x often returns dictionaries containing parallel text, score, and polygon
     arrays; older versions return nested lists. This function understands both shapes and
     creates dictionaries containing text, confidence, polygon, and bounding box.
-    
+
     Downstream code never needs to know which Paddle version produced the result. Invalid
     individual tokens are skipped, while valid tokens on the same page are preserved."""
     items: list[dict[str, Any]] = []
@@ -196,7 +197,7 @@ def _page_ocr_matrix(
     page: fitz.Page, requested_dpi: int, max_side: int = MAX_OCR_IMAGE_SIDE
 ) -> tuple[fitz.Matrix, float]:
     """Choose a PDF render scale that reaches the requested DPI without oversized OCR images.
-    
+
     Paddle would resize an image whose longest side exceeds its detection limit. Rendering
     directly at that effective maximum avoids creating a much larger temporary PNG only
     for Paddle to shrink it again. The returned effective DPI is saved for coordinate
@@ -217,7 +218,7 @@ def render_pdf_pages_with_info(
     pdf_path: Path, image_dir: Path, dpi: int
 ) -> list[dict[str, Any]]:
     """Render every PDF page to a temporary PNG and retain coordinate-conversion information.
-    
+
     Each returned record contains the image path and dimensions together with the original
     PDF page dimensions, rotation, and effective DPI. OCR operates on the PNG; later code
     uses these values to map recognized token positions back to the PDF page accurately."""
@@ -251,12 +252,12 @@ def ocr_pdf_with_layout(
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """OCR one PDF and return both combined text and page-level layout data.
-    
+
     The PDF is rendered inside a temporary directory that is automatically deleted. Each
     page is sent to PaddleOCR, normalized through ``extract_ocr_items``, and added to a page
     record with its dimensions. Token text is also joined into one newline-separated string
     for regex and fuzzy metadata extraction.
-    
+
     Progress callbacks report rendering, recognition, and normalization separately, making
     it possible to distinguish a slow PDF render from a slow OCR model prediction."""
     lines: list[str] = []
@@ -266,12 +267,15 @@ def ocr_pdf_with_layout(
     # A temporary directory guarantees cleanup even when one page raises.
     with tempfile.TemporaryDirectory(prefix="paddleocr_pdf_") as temp_dir:
         with time_block(f"{pdf_path.name}: rendered pages", progress_callback):
-            rendered_pages = render_pdf_pages_with_info(pdf_path, Path(temp_dir), dpi)
+            rendered_pages = render_pdf_pages_with_info(
+                pdf_path, Path(temp_dir), dpi
+            )
         total = len(rendered_pages)
         num = 1
         for page_info in rendered_pages:
             with time_block(
-                f"{pdf_path.name}: OCR page {num} of {total}", progress_callback
+                f"{pdf_path.name}: OCR page {num} of {total}",
+                progress_callback,
             ):
                 result = ocr.predict(str(page_info["image_path"]))
             num += 1
@@ -301,7 +305,7 @@ def ocr_pdf_with_layout(
 
 def gpu_is_available() -> bool:
     """Check whether the installed Paddle build and computer can actually use CUDA.
-    
+
     Merely requesting GPU mode is not proof that Paddle was compiled with CUDA or that a
     visible device exists. Exceptions are treated as unavailable so ``auto`` mode can fall
     back to CPU instead of failing before a scan begins."""
@@ -316,9 +320,11 @@ def gpu_is_available() -> bool:
         return False
 
 
-def resolve_ocr_device(ocr_device: str = "auto", gpu_device_id: int = 0) -> str:
+def resolve_ocr_device(
+    ocr_device: str = "auto", gpu_device_id: int = 0
+) -> str:
     """Turn the user's ``auto``, ``cpu``, or ``gpu`` choice into Paddle's device string.
-    
+
     Explicit choices are honored; ``auto`` selects the requested GPU index only when
     ``gpu_is_available`` succeeds. This resolved value is also part of the OCR-engine cache
     key, preventing a CPU engine from being reused for a later GPU request."""
@@ -337,11 +343,11 @@ def make_ocr(
     gpu_device_id: int = 0,
 ) -> PaddleOCR:
     """Construct a PaddleOCR engine compatible with several PaddleOCR releases.
-    
+
     The function disables orientation and unwarping models because they add startup cost and
     transform token coordinates away from the original PDF geometry. It then attempts the
     modern ``device=`` constructor, the older ``use_gpu`` form, and finally a minimal form.
-    
+
     CPU thread settings are applied only to CPU mode. A constructor ``TypeError`` means a
     particular API style is unsupported and triggers the next attempt; other failures still
     surface to the caller."""
@@ -357,7 +363,7 @@ def make_ocr(
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
         "use_textline_orientation": False,
-        "text_det_limit_side_len": 4000,
+        "text_det_limit_side_len": 10000,
         "text_det_limit_type": "max",
     }
 
@@ -409,11 +415,11 @@ def get_cached_ocr(
     gpu_device_id: int = 0,
 ) -> PaddleOCR:
     """Reuse a process-lifetime OCR engine for an identical configuration.
-    
+
     Loading Paddle models is expensive compared with scanning a small packet. The cache key
     includes language, resolved device, GPU index, and CPU thread count. A lock prevents two
     simultaneous requests from constructing the same engine twice.
-    
+
     Worker processes do not share this cache because their memory is isolated and Paddle
     predictor objects should not be transferred between processes."""
     resolved_device = resolve_ocr_device(ocr_device, gpu_device_id)
@@ -440,7 +446,7 @@ def _init_ocr_worker(
     lang: str, cpu_threads: int, ocr_device: str, gpu_device_id: int
 ) -> None:
     """Create the private OCR engine used inside one CPU worker process.
-    
+
     ``ProcessPoolExecutor`` calls this initializer once per worker. The engine is stored in a
     process-global variable so every PDF assigned to that worker can reuse the loaded models
     instead of rebuilding them for each task."""
@@ -457,7 +463,7 @@ def _ocr_one_pdf_worker(
     index: int, pdf_path_text: str, dpi: int
 ) -> tuple[int, dict[str, Any]]:
     """OCR one PDF inside a worker process and preserve its original batch position.
-    
+
     The worker uses its process-local engine, builds the standard scan record, and returns
     the input index alongside the result. The parent process uses that index to restore the
     original filename order even though workers finish out of order."""
@@ -487,12 +493,12 @@ def ocr_pdf_batch(
     progress_callback: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """OCR an ordered list of PDFs using the safest available execution strategy.
-    
+
     With one worker, the function reuses the supplied or cached engine and reports detailed
     page progress. With multiple CPU workers, it creates a process pool whose workers each
     initialize a private engine. GPU requests are forced to one worker to avoid competing
     model instances on the same device.
-    
+
     Every returned item has ``source_path``, ``source_name``, combined ``ocr_text``, and
     coordinate-rich ``ocr_pages``. Parallel results are reordered to match the input list so
     batch voting and UI display remain deterministic."""
@@ -521,7 +527,9 @@ def ocr_pdf_batch(
         for num, pdf_path in enumerate(pdf_paths, start=1):
             if progress_callback:
                 if total > 1:
-                    progress_callback(f"Document {num} of {total}: {pdf_path.name}")
+                    progress_callback(
+                        f"Document {num} of {total}: {pdf_path.name}"
+                    )
                 else:
                     progress_callback(f"Document: {pdf_path.name}")
             full_ocr = ocr_pdf_with_layout(
@@ -550,7 +558,9 @@ def ocr_pdf_batch(
         ),
     ) as executor:
         futures = {
-            executor.submit(_ocr_one_pdf_worker, index, str(pdf_path), dpi): index
+            executor.submit(
+                _ocr_one_pdf_worker, index, str(pdf_path), dpi
+            ): index
             for index, pdf_path in enumerate(pdf_paths)
         }
         completed = 0

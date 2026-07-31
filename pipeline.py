@@ -17,8 +17,8 @@ Batch pipeline:
 
 Document type and project code remain document-specific. Shared property
 fields are synchronized because the drawings in Batch mode represent one
-property. Mass mode calls the same machinery one PDF at a time with stricter
-lookup rules so unrelated jobs cannot contaminate one another."""
+property. Mass mode uses ``extract_independent_document_metadata`` instead, so
+unrelated jobs never enter the voting or shared-value merge stages."""
 
 from __future__ import annotations
 
@@ -166,6 +166,110 @@ def _confident_unique_address_record(
             exact_or_containing.append(record)
 
     return exact_or_containing[0] if len(exact_or_containing) == 1 else None
+
+
+def extract_independent_document_metadata(
+    scanned_document: Mapping[str, Any],
+    config: Config,
+    default_project_code: str,
+    default_document_type: str,
+    performance_callback=None,
+) -> ExtractedMetadata:
+    """Extract and safely enrich metadata for one unrelated Mass Scan PDF.
+
+    App role:
+        Mass mode treats every PDF as a separate job. This function therefore
+        performs only single-document work: it extracts values from that PDF,
+        optionally verifies the property through SDAT, and returns the finished
+        metadata for that one review record. It never votes with another PDF,
+        repairs duplicate document types across a set, or applies packet-level
+        shared values.
+
+    How it works:
+        1. Run the normal OCR-text metadata extractor for this document.
+        2. Return lookup-only SDAT printouts unchanged because they are reference
+           material rather than engineering drawings to be enriched and filed.
+        3. If SDAT is enabled, try a direct Tax ID search first.
+        4. If Tax ID does not resolve, search by address and accept the result only
+           when exactly one returned record clearly matches that address.
+        5. Do not use the broader map/parcel fallback used by Batch mode. A broad
+           match is unsafe when neighboring files may describe unrelated jobs.
+        6. Force the configured project code onto the result so the filing location
+           follows the user's Mass Scan settings rather than a stray OCR reading.
+
+    Returns:
+        One immutable ``ExtractedMetadata`` object ready to be converted into the
+        JSON-style document dictionary stored in the review queue.
+    """
+    emit = performance_callback or (lambda _message: None)
+    started = time.perf_counter()
+
+    metadata = extract_metadata(
+        scanned_document.get("ocr_text", ""),
+        config,
+        default_project_code,
+        default_document_type,
+        scanned_document.get("ocr_pages", []),
+        performance_callback=emit,
+        profile_label="mass_document",
+    )
+    emit(
+        f"[PERF] mass.metadata.extract: {time.perf_counter() - started:.4f}s | "
+        f"chars={len(scanned_document.get('ocr_text', ''))}; "
+        f"type={metadata.document_type}"
+    )
+
+    # A downloaded SDAT sheet is kept as evidence for review. Enriching it is
+    # unnecessary, and changing its extracted values could hide what the source
+    # reference document actually contained.
+    if metadata.document_type == LOOKUP_DOCUMENT_TYPE:
+        return metadata
+
+    result = replace(
+        metadata,
+        project_code=safe_path_part(default_project_code, "Project"),
+    )
+    if not config.get("sdat_lookup", True):
+        return result
+
+    county = str(config.get("default_county", "") or "")
+
+    # A Tax ID identifies a property more precisely than an address, so it is
+    # always attempted first. Only the first record is used because the direct
+    # district/account query is expected to identify one parcel.
+    if is_known_value(result.tax_id):
+        lookup_started = time.perf_counter()
+        records = _lookup_by_tax_id(result.tax_id, county)
+        emit(
+            f"[PERF] mass.sdat.lookup_by_tax_id: "
+            f"{time.perf_counter() - lookup_started:.4f}s | records={len(records)}"
+        )
+        if records:
+            return replace(
+                metadata_from_sdat_record(result, records[0]),
+                project_code=safe_path_part(default_project_code, "Project"),
+            )
+
+    # Address lookup is deliberately conservative. Maryland data can return
+    # multiple parcels for one street address, and Mass mode must never guess
+    # which unrelated PDF owns which Tax ID.
+    if is_known_value(result.address):
+        lookup_started = time.perf_counter()
+        records = lookup_maryland_property_by_address(
+            result.address, county=county, limit=25
+        )
+        emit(
+            f"[PERF] mass.sdat.lookup_by_address: "
+            f"{time.perf_counter() - lookup_started:.4f}s | records={len(records)}"
+        )
+        selected = _confident_unique_address_record(result.address, records)
+        if selected is not None:
+            return replace(
+                metadata_from_sdat_record(result, selected),
+                project_code=safe_path_part(default_project_code, "Project"),
+            )
+
+    return result
 
 def choose_batch_metadata_by_vote(
     scanned_documents: list[dict[str, Any]],

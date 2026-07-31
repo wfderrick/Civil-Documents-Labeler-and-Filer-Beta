@@ -2,14 +2,6 @@
 
 This version is optimized for one related batch of PDFs, such as Site Plan, House Location, Wall Check, and Field Notes.
 
-## Start here if you are learning the code
-
-Read `BEGINNER_DEVELOPER_WALKTHROUGH.md` before changing the application. It traces a PDF from the Scan button through OCR, metadata extraction, batch voting, SDAT, review, and filing. The source files then explain each function in terms of its role in that workflow, how it performs its job, and which safety decisions it protects. `DOCUMENTATION_APPROACH.md` describes the comment style used in this copy.
-
-## Version 3.0 performance update
-
-Document classification now checks normalized exact keywords before using exhaustive fuzzy matching. Exact matches preserve the prior configuration-order winner and bypass thousands of unnecessary `SequenceMatcher` comparisons. The original fuzzy path remains available for OCR typos. See `PERFORMANCE_CHANGES_V3.0.md`.
-
 ## Key behavior
 
 - OCRs every PDF in the input folder.
